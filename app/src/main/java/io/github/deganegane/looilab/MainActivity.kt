@@ -34,6 +34,17 @@ class MainActivity : ComponentActivity() {
     private lateinit var eyes: CameraEyes
     private lateinit var tracking: Tracking
     private val face = FaceState()
+    /** True while the fullscreen face is shown, i.e. the phone sits on the robot. */
+    private var faceMode by mutableStateOf(false)
+
+    @Suppress("DEPRECATION")
+    private fun displayRotation(): Int =
+        if (Build.VERSION.SDK_INT >= 30) display?.rotation ?: 0 else windowManager.defaultDisplay.rotation
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        eyes.rotation = displayRotation()
+    }
 
     private val askCamera =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
@@ -103,10 +114,10 @@ class MainActivity : ComponentActivity() {
         brain = StevoBrain(applicationContext, face, ble, eyes) { done ->
             if (eyes.running) eyes.takePhoto(done) else done(null)
         }
-        tracking = Tracking(eyes, face, ble, mirror = { brain.mirror }, busy = { ble.manualDrive })
+        eyes.rotation = displayRotation()
+        tracking = Tracking(eyes, face, ble, mirror = { brain.mirror }, bodyAllowed = { faceMode })
         applySettings()
         setContent {
-            var faceMode by remember { mutableStateOf(false) }
 
             // The face reacts to what the base reports.
             //  - 0A 01 / 0A 00: lifted / put down (confirmed 2026-11-10);

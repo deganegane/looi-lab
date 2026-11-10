@@ -429,12 +429,13 @@ class StevoBrain(
 
 /** Body language Gemini can ask for, built from the animations the official app used. */
 object Gestures {
+    private fun keys(label: String, k: ByteArray): suspend (LooiBle) -> Unit = { it.playScript(k, "Stevo: $label") }
     private fun anim(n: Int): suspend (LooiBle) -> Unit = { it.playScript(CapturedAnims.all[n - 1].keyframes, "Stevo: animacija $n") }
     val all: Map<String, suspend (LooiBle) -> Unit> = linkedMapOf(
         "nod" to anim(2),
         "shake" to anim(17),
-        "look_up" to anim(6),
-        "look_down" to anim(7),
+        "look_up" to keys("pogled gore", LooiProtocol.keys(0, 50, 3, 8, 22, 3, 38, 22, 3, 50, 50, 3)),
+        "look_down" to keys("pogled dolje", LooiProtocol.keys(0, 50, 3, 8, 78, 3, 38, 78, 3, 50, 50, 3)),
         "turn_left" to anim(4),
         "turn_right" to anim(5),
         "forward" to anim(15),

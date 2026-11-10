@@ -67,6 +67,23 @@ object LooiProtocol {
             byteArrayOf(i.toByte(), id.toByte()) + chunk.toByteArray()
         }
 
+    /** Head position on channel 3: 0 = all the way up, 100 = all the way down. */
+    const val HEAD_UP = 22
+    const val HEAD_MIDDLE = 50
+    const val HEAD_DOWN = 78
+
+    /** Keyframes from (tick, value, channel) triples; each channel used gets its end marker. */
+    fun keys(vararg t: Int): ByteArray {
+        val out = ArrayList<Byte>()
+        var i = 0
+        while (i + 2 < t.size) { out += t[i].toByte(); out += t[i + 1].coerceIn(-127, 127).toByte(); out += t[i + 2].toByte(); i += 3 }
+        t.toList().chunked(3).map { it[2] }.distinct().forEach { c -> out += 0xFF.toByte(); out += 0; out += c.toByte() }
+        return out.toByteArray()
+    }
+
+    /** Head glides to [pos] (0 up … 100 down) and stays there. */
+    fun headTo(pos: Int, ticks: Int = 8) = keys(0, pos, 3, ticks, pos, 3)
+
     /** One channel held at [value] for [ticks], then ended. */
     fun holdScript(channel: Int, value: Int, ticks: Int): ByteArray {
         val v = value.coerceIn(-127, 127).toByte()

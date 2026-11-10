@@ -51,6 +51,10 @@ class CameraEyes(private val context: Context) {
     )
     private var provider: ProcessCameraProvider? = null
     private var capture: ImageCapture? = null
+    private var analysis: ImageAnalysis? = null
+    /** Display rotation (Surface.ROTATION_*): frames are turned upright for it. */
+    var rotation: Int = 0
+        set(v) { field = v; analysis?.targetRotation = v; capture?.targetRotation = v }
     var running = false
         private set
 
@@ -62,9 +66,12 @@ class CameraEyes(private val context: Context) {
             val p = future.get(); provider = p
             val analysis = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setTargetRotation(rotation)
                 .build()
+            this.analysis = analysis
             analysis.setAnalyzer(exec) { img -> analyze(img) }
-            val cap = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).build()
+            val cap = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                .setTargetRotation(rotation).build()
             capture = cap
             runCatching {
                 p.unbindAll()

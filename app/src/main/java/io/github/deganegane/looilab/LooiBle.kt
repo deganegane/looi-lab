@@ -286,6 +286,7 @@ class LooiBle(private val context: Context) {
         write(LooiProtocol.CONTROL, LooiProtocol.START)
         _state.value = ConnState.READY
         note("··", "spreman ✓")
+        playScript(LooiProtocol.headTo(LooiProtocol.HEAD_MIDDLE, 12), "glava u sredinu", gesture = false)
         keepAlive = scope.launch {
             while (isActive) {
                 delay(30_000)
@@ -307,8 +308,12 @@ class LooiBle(private val context: Context) {
 
     suspend fun stopScript() = write(LooiProtocol.SCRIPT, LooiProtocol.STOP_SCRIPT)
 
-    suspend fun playScript(keyframes: ByteArray, label: String) {
+    /** When the last gesture (not face tracking) started: tracking leaves the body alone for a bit. */
+    @Volatile var lastGestureAt = 0L
+
+    suspend fun playScript(keyframes: ByteArray, label: String, gesture: Boolean = true) {
         if (_state.value != ConnState.READY) return
+        if (gesture) lastGestureAt = System.currentTimeMillis()
         scriptId = if (scriptId >= 0xF0) 0x40 else scriptId + 1
         note("··", "$label → skripta #${"%02x".format(scriptId)}")
         stopScript()

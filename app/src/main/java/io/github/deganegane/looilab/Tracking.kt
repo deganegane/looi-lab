@@ -8,20 +8,26 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 /**
- * Keeps the robot turned toward the nearest face: the eyes follow at once, the body turns
- * (FED0) and the head tilts (FED1) when the face drifts out of the middle. Back after a while
- * away: a happy face. [mirror] flips left/right if a phone's camera reports it the other way.
+ * Keeps Stevo turned toward the nearest face. The eyes always follow. The body only moves while
+ * the phone sits on the robot ([bodyAllowed]: the fullscreen face, landscape):
+ *  - turning: FED0 speed, proportional to how far off-centre the face is;
+ *  - head: absolute positions on script channel 3, nudged a little at a time and kept between
+ *    up and down; with no face for a few seconds it glides back to the middle.
+ * After a gesture the body is left alone for a moment, so nods and dances are not cut short.
  */
 class Tracking(
     private val eyes: CameraEyes,
     private val face: FaceState,
     private val ble: LooiBle,
     private val mirror: () -> Boolean,
-    private val busy: () -> Boolean, // e.g. the joystick is in use
+    private val bodyAllowed: () -> Boolean,
 ) {
     private var job: Job? = null
     private var lastSeen = 0L
-    private var moving = false
+    private var turning = false
+    private var head = LooiProtocol.HEAD_MIDDLE
+    private var lastHeadCmd = 0L
+    private var centred = true
 
     fun start(scope: CoroutineScope) {
         if (job != null) return
@@ -35,36 +41,50 @@ class Tracking(
 
     fun stop() {
         job?.cancel(); job = null
-        if (moving) { moving = false; ble.launch { move(0, 0) } }
+        stopTurning()
         face.lookX = 0f; face.lookY = 0f
+    }
+
+    private fun stopTurning() {
+        if (turning) { turning = false; ble.launch { move(0, 0) } }
+    }
+
+    private fun headTo(pos: Int) {
+        head = pos.coerceIn(LooiProtocol.HEAD_UP, LooiProtocol.HEAD_DOWN)
+        lastHeadCmd = System.currentTimeMillis()
+        val p = head
+        ble.launch { playScript(LooiProtocol.headTo(p, 6), "praćenje: glava $p", gesture = false) }
     }
 
     private fun step() {
         val now = System.currentTimeMillis()
         val f = eyes.face.value?.takeIf { now - it.at < 500 }
+        val canMove = bodyAllowed() && !ble.manualDrive && ble.state.value == ConnState.READY &&
+            now - ble.lastGestureAt > 3_000
+
         if (f == null) {
-            if (moving) { moving = false; ble.launch { move(0, 0) } }
-            // Slowly let the eyes return to the middle.
+            stopTurning()
             face.lookX *= 0.9f; face.lookY *= 0.9f
+            // Lost you for a while: head back to the middle, once.
+            if (canMove && !centred && now - lastSeen > 3_000) { centred = true; headTo(LooiProtocol.HEAD_MIDDLE) }
             return
         }
-        if (now - lastSeen > 20_000 && lastSeen != 0L) face.flash(Expr.HAPPY) // you're back!
+        if (lastSeen != 0L && now - lastSeen > 20_000) face.flash(Expr.HAPPY) // you're back!
         lastSeen = now
 
         val x = if (mirror()) -f.x else f.x // -1 = robot's left
-        // On the screen the robot's left is the viewer's right.
-        face.lookX = (-x * 1.1f).coerceIn(-1.2f, 1.2f)
+        face.lookX = (-x * 1.1f).coerceIn(-1.2f, 1.2f) // on screen the robot's left is the viewer's right
         face.lookY = (f.y * 0.9f).coerceIn(-1f, 1f)
+        if (!canMove) { stopTurning(); return }
 
-        if (busy() || ble.state.value != ConnState.READY) return
-        val rotate = if (abs(x) > 0.18f) (-x * 40).toInt().coerceIn(-35, 35) else 0 // + = turn left
-        val tilt = if (abs(f.y) > 0.25f) (f.y * 30).toInt().coerceIn(-25, 25) else 0  // - = head up
-        if (rotate != 0 || tilt != 0) {
-            moving = true
-            ble.launch { move(rotate, tilt) }
-        } else if (moving) {
-            moving = false
-            ble.launch { move(0, 0) }
+        // Turn: proportional, with a dead zone in the middle.
+        val rotate = if (abs(x) > 0.2f) (-x * 32).toInt().coerceIn(-28, 28) else 0 // + = left
+        if (rotate != 0) { turning = true; ble.launch { move(rotate, 0) } } else stopTurning()
+
+        // Head: small steps toward the face, at most ~3 times a second.
+        if (abs(f.y) > 0.22f && now - lastHeadCmd > 350) {
+            centred = false
+            headTo(head + (f.y * 8).toInt())
         }
     }
 }
