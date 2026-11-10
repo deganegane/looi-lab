@@ -29,7 +29,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-enum class Screen { FACE, SETTINGS, MEMORY, DIAGNOSTICS }
+enum class Screen { FACE, SETTINGS, DIAGNOSTICS }
 
 class MainActivity : ComponentActivity() {
     private lateinit var ble: LooiBle
@@ -155,7 +155,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         ble = LooiBle(applicationContext)
         eyes = CameraEyes(applicationContext)
-        memory = Memory(applicationContext) { brain.apiKey }
+        memory = Memory(applicationContext, apiKey = { brain.apiKey }, log = { ble.note("··", it) })
         brain = StevoBrain(applicationContext, face, ble, eyes, memory,
             takePhoto = { done -> if (eyes.running) eyes.takePhoto(done) else done(null) },
             onIdle = { life.sleep() })
@@ -191,7 +191,7 @@ class MainActivity : ComponentActivity() {
             StevoTheme {
                 Surface(Modifier.fillMaxSize()) {
                     BackHandler(enabled = screen != Screen.FACE) {
-                        showScreen(if (screen == Screen.MEMORY) Screen.SETTINGS else Screen.FACE)
+                        showScreen(if (screen == Screen.DIAGNOSTICS) Screen.SETTINGS else Screen.FACE)
                     }
                     when (screen) {
                         Screen.FACE -> HomeFace(
@@ -202,8 +202,7 @@ class MainActivity : ComponentActivity() {
                             onSettings = { showScreen(Screen.SETTINGS) },
                             onConnect = { connect() },
                         )
-                        Screen.SETTINGS -> SettingsScreen(
-                            ble, brain, memory,
+                        Screen.SETTINGS -> SettingsScreen(ble, brain, memory, SettingsActions(
                             onBack = { showScreen(Screen.FACE) },
                             onConnect = { connect() },
                             onApply = {
@@ -211,16 +210,11 @@ class MainActivity : ComponentActivity() {
                                 else applySettings()
                             },
                             onPhoto = { photo() },
-                            onMemory = { showScreen(Screen.MEMORY) },
                             onDiagnostics = { showScreen(Screen.DIAGNOSTICS) },
                             onCharging = { on -> ble.launch { setCharging(on) } },
-                        )
-                        Screen.MEMORY -> MemoryScreen(
-                            memory,
-                            onBack = { showScreen(Screen.SETTINGS) },
                             onExport = { exportMemory.launch("stevo-pamcenje.json") },
                             onImport = { importMemory.launch(arrayOf("application/json", "*/*")) },
-                        )
+                        ))
                         Screen.DIAGNOSTICS -> LabScreen(
                             ble = ble, face = face, brain = brain, eyes = eyes,
                             onTalk = { talk() },

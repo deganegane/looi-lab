@@ -14,8 +14,8 @@ android {
         applicationId = "io.github.deganegane.looilab"
         minSdk = 26
         targetSdk = 36
-        versionCode = 11
-        versionName = "0.11"
+        versionCode = 12
+        versionName = "0.12"
     }
 
     // One permanent key, so every new APK installs over the previous one.
@@ -41,7 +41,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
 }
 
 kotlin {

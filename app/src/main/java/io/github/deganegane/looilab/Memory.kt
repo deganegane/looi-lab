@@ -30,7 +30,12 @@ data class Summary(val text: String, val at: Long)
  * Notes and the latest summaries go into his instructions at the start of each conversation;
  * the full archive never does, it is only searched.
  */
-class Memory(private val context: Context, private val apiKey: () -> String) {
+class Memory(
+    private val context: Context,
+    private val apiKey: () -> String,
+    /** Messages for the diagnostics log (what was learned, what failed). */
+    private val log: (String) -> Unit = {},
+) {
     companion object {
         val LEVELS = listOf("Isključeno", "Bilješke", "Bilješke + sažeci", "Sve (s pretraživanjem)")
         val KEEP = linkedMapOf(0 to "Zauvijek", 365 to "Godinu dana", 30 to "30 dana")
@@ -104,10 +109,12 @@ class Memory(private val context: Context, private val apiKey: () -> String) {
         val now = SimpleDateFormat("EEEE d.M.yyyy. HH:mm", Locale("hr")).format(Date())
         val sb = StringBuilder("Right now it is $now.\n")
         if (level == 0) return sb.append("You have no memory of earlier conversations.").toString()
-        sb.append("\nMemory: you remember things between conversations. When you learn something worth ")
-            .append("keeping about the person or their life (name, family, pets, plans, likes, ")
-            .append("important dates), save it with remember, in one short sentence. If they ask you ")
-            .append("to forget something, use forget. Do not save small talk.\n")
+        sb.append("\nMemory: you remember things between conversations. The moment you learn ")
+            .append("something worth keeping about the person or their life (their NAME first of all, ")
+            .append("family, pets, work, plans, likes, important dates), call remember right away, ")
+            .append("in one short sentence, while you keep talking. If they ask you to forget ")
+            .append("something, use forget. Do not save small talk. Use what you know naturally, ")
+            .append("e.g. greet the person by name.\n")
         val n = _notes.value
         if (n.isNotEmpty()) sb.append("\nWhat you know (your notes):\n").append(n.joinToString("\n") { "- ${it.text}" }).append('\n')
         if (level >= 2) {
@@ -166,35 +173,67 @@ class Memory(private val context: Context, private val apiKey: () -> String) {
 
     // ------------------------------------------------------------------ end of a conversation
 
-    /** Archive the conversation (level 3) and summarise it in the background (level 2+). */
+    /**
+     * After a conversation: archive it (level 3), and in the background let a small text model
+     * read it once more for facts Stevo forgot to save himself (level 1+) and write a short
+     * summary (level 2+). So his memory does not depend on him calling remember.
+     */
     fun endConversation(lines: List<String>, language: String) {
-        val talk = lines.filter { !it.startsWith("·") && !it.startsWith("⚠") && !it.startsWith("📷") }
-        if (level == 0 || talk.count { it.startsWith("ti:") } < 1) return
+        val talk = lines.filter { it.startsWith("ti:") || (!it.startsWith("·") && !it.startsWith("⚠") && !it.startsWith("📷") && !it.startsWith("🧠")) }
+        if (level == 0 || talk.none { it.startsWith("ti:") }) return
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.ROOT).format(Date())
         if (level >= 3) {
             File(convDir, "$stamp.txt").writeText(talk.joinToString("\n"))
             _conversations.value = convDir.listFiles()?.size ?: 0
         }
-        if (level >= 2 && apiKey().isNotBlank()) scope.launch { summarise(talk, language) }
+        if (apiKey().isBlank()) return
+        scope.launch { digest(talk, language) }
     }
 
-    private fun summarise(talk: List<String>, language: String) {
+    private fun digest(talk: List<String>, language: String) {
         val lang = mapOf("hr" to "Croatian", "en" to "English", "de" to "German")[language] ?: "the conversation's language"
-        val prompt = "Summarise this conversation between a person and their desk robot in at most two " +
-            "short sentences, in $lang. Keep what matters later: facts about the person, plans, " +
-            "feelings, what was decided. No introduction.\n\n" + talk.joinToString("\n").take(12_000)
-        val body = JSONObject().put("contents", JSONArray().put(JSONObject()
-            .put("parts", JSONArray().put(JSONObject().put("text", prompt))))).toString()
+        val known = _notes.value.joinToString("\n") { "- ${it.text}" }.ifEmpty { "(nothing yet)" }
+        val prompt = """
+            A person talked with their desk robot. Lines starting with "ti:" are the person.
+            Already known about the person:
+            $known
+
+            Return JSON: {"facts": [...], "summary": "..."}
+            facts: NEW lasting facts about the person or their life that are not already known
+            (their name, family, pets, work, plans, likes, important dates), each one short
+            sentence in $lang, written about the person ("Zove se Ivan."). Empty list if none.
+            summary: what the conversation was about, at most two short sentences in $lang.
+
+            Conversation:
+        """.trimIndent() + "\n" + talk.joinToString("\n").take(12_000)
+        val body = JSONObject()
+            .put("contents", JSONArray().put(JSONObject().put("parts", JSONArray().put(JSONObject().put("text", prompt)))))
+            .put("generationConfig", JSONObject().put("responseMimeType", "application/json"))
+            .toString()
         val req = Request.Builder()
             .url("https://generativelanguage.googleapis.com/v1beta/models/$SUMMARY_MODEL:generateContent?key=${apiKey()}")
             .post(body.toRequestBody("application/json".toMediaType())).build()
-        val text = runCatching {
+        val result = runCatching {
             http.newCall(req).execute().use { r ->
-                JSONObject(r.body!!.string()).getJSONArray("candidates").getJSONObject(0)
-                    .getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text").trim()
+                val raw = r.body?.string().orEmpty()
+                if (!r.isSuccessful) error("HTTP ${r.code}: ${raw.take(160)}")
+                val text = JSONObject(raw).getJSONArray("candidates").getJSONObject(0)
+                    .getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text")
+                JSONObject(text.trim().removePrefix("```json").removeSuffix("```"))
             }
-        }.getOrNull() ?: return
-        if (text.isNotEmpty()) saveSummaries(_summaries.value + Summary(text, System.currentTimeMillis()))
+        }
+        val o = result.getOrElse { log("⚠ pamćenje: sažetak nije uspio (${it.message})"); return }
+        o.optJSONArray("facts")?.let { a ->
+            for (i in 0 until a.length()) {
+                val f = a.optString(i)
+                if (remember(f) == "saved") log("🧠 zapamtio: $f")
+            }
+        }
+        val summary = o.optString("summary").trim()
+        if (level >= 2 && summary.isNotEmpty()) {
+            saveSummaries(_summaries.value + Summary(summary, System.currentTimeMillis()))
+            log("🧠 sažetak: $summary")
+        }
     }
 
     // ------------------------------------------------------------------ settings screen

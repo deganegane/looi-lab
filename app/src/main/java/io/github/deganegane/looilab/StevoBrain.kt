@@ -57,7 +57,7 @@ class StevoBrain(
         private const val URL =
             "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
         /** No speech either way for this long: the session closes (it costs money while open). */
-        const val IDLE_MS = 25_000L
+        const val IDLE_MS = 40_000L
 
         /** Conversation language: a fixed one (default) or "auto". */
         val LANGUAGES = linkedMapOf("hr" to "Hrvatski", "en" to "English", "de" to "Deutsch", "auto" to "Automatski")
@@ -200,6 +200,7 @@ class StevoBrain(
         baseBefore = face.base
         face.set(Expr.CURIOUS)
         running = true
+        resumeHandle = null; resumes = 0; socketReady = false
         lastActivity = System.currentTimeMillis()
         val req = Request.Builder().url("$URL?key=$apiKey").build()
         ws = http.newWebSocket(req, listener)
@@ -276,44 +277,75 @@ class StevoBrain(
             .put("tools", JSONArray().put(JSONObject().put("functionDeclarations", tools)))
             .put("inputAudioTranscription", JSONObject())
             .put("outputAudioTranscription", JSONObject())
+            .put("sessionResumption", JSONObject().apply { resumeHandle?.let { put("handle", it) } })
+            .put("contextWindowCompression", JSONObject().put("slidingWindow", JSONObject()))
         return JSONObject().put("setup", setup).toString()
     }
 
     // ------------------------------------------------------------------ socket
+
+    /**
+     * Gemini ends a live connection after some minutes (it says so with goAway first). The
+     * session itself lives on: we reconnect with the last resumption handle and carry on, so a
+     * long chat is never cut off.
+     */
+    @Volatile private var resumeHandle: String? = null
+    /** False between opening a socket and its setupComplete: nothing may be sent then. */
+    @Volatile private var socketReady = false
+    private var resumes = 0
+
+    private fun resume(why: String) {
+        val h = resumeHandle
+        if (!running || h == null || resumes >= 20) { stop(why); return }
+        resumes++
+        socketReady = false
+        val old = ws
+        ws = http.newWebSocket(Request.Builder().url("$URL?key=$apiKey").build(), listener)
+        old?.close(1000, "resume")
+    }
 
     private val listener = object : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
             webSocket.send(setupMessage())
         }
 
-        override fun onMessage(webSocket: WebSocket, text: String) = handle(text)
-        override fun onMessage(webSocket: WebSocket, bytes: ByteString) = handle(bytes.utf8())
+        override fun onMessage(webSocket: WebSocket, text: String) { if (webSocket == ws) handle(text) }
+        override fun onMessage(webSocket: WebSocket, bytes: ByteString) { if (webSocket == ws) handle(bytes.utf8()) }
 
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
             webSocket.close(1000, null)
-            if (running) stop(if (code == 1000) "· razgovor završen" else "⚠ Gemini je zatvorio vezu ($code): $reason")
+            if (webSocket != ws || !running) return
+            if (code == 1000) stop("· razgovor završen")
+            else resume("⚠ Gemini je zatvorio vezu ($code): $reason")
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-            if (running) stop("⚠ veza nije uspjela: ${response?.code ?: ""} ${t.message ?: t.javaClass.simpleName}")
+            if (webSocket != ws || !running) return
+            if (_state.value == TalkState.CONNECTING) stop("⚠ veza nije uspjela: ${response?.code ?: ""} ${t.message ?: t.javaClass.simpleName}")
+            else resume("⚠ veza je pukla: ${t.message ?: t.javaClass.simpleName}")
         }
     }
 
     private fun handle(text: String) {
         val msg = runCatching { JSONObject(text) }.getOrNull() ?: return
+        msg.optJSONObject("sessionResumptionUpdate")?.let { u ->
+            if (u.optBoolean("resumable", true)) u.optString("newHandle").takeIf { it.isNotEmpty() }?.let { resumeHandle = it }
+        }
         when {
+            msg.has("setupComplete") && _state.value != TalkState.CONNECTING -> socketReady = true // resumed, audio keeps running
             msg.has("setupComplete") -> {
+                socketReady = true
                 line("· $name sluša" + if (vision) " i gleda" else "")
                 if (vision) eyes.onFrame = { jpg ->
                     val b64 = Base64.encodeToString(jpg, Base64.NO_WRAP)
-                    ws?.send("""{"realtimeInput":{"video":{"mimeType":"image/jpeg","data":"$b64"}}}""")
+                    if (socketReady) ws?.send("""{"realtimeInput":{"video":{"mimeType":"image/jpeg","data":"$b64"}}}""")
                 }
                 startAudio()
                 _state.value = TalkState.LISTENING
             }
             msg.has("serverContent") -> serverContent(msg.getJSONObject("serverContent"))
             msg.has("toolCall") -> toolCall(msg.getJSONObject("toolCall"))
-            msg.has("goAway") -> stop("· Gemini traži prekid sesije (vremensko ograničenje)")
+            msg.has("goAway") -> resume("· Gemini je zatvorio sesiju (vremensko ograničenje)")
         }
     }
 
@@ -452,10 +484,12 @@ class StevoBrain(
                     if (n <= 0) continue
                     val now = System.currentTimeMillis()
                     val stevoTalking = now < speakingUntil || playQueue.isNotEmpty()
+                    // Your voice keeps the conversation open, even before Gemini transcribes it.
+                    if (!stevoTalking && level(buf.copyOf(n)) > 0.05f) lastActivity = now
                     if (!stevoTalking && _state.value == TalkState.SPEAKING) _state.value = TalkState.LISTENING
                     val send = if (stevoTalking && !allowInterrupt) ByteArray(n) else buf.copyOf(n) // silence keeps the stream alive
                     val b64 = Base64.encodeToString(send, Base64.NO_WRAP)
-                    ws?.send("""{"realtimeInput":{"audio":{"mimeType":"audio/pcm;rate=$IN_RATE","data":"$b64"}}}""")
+                    if (socketReady) ws?.send("""{"realtimeInput":{"audio":{"mimeType":"audio/pcm;rate=$IN_RATE","data":"$b64"}}}""")
                     if (!stevoTalking && now - lastActivity > IDLE_MS) {
                         stop("· $name je zaspao (tišina). Dodirni lice za novi razgovor.")
                         onIdle()
