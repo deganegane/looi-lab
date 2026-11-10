@@ -51,6 +51,8 @@ class FaceState {
     /** Gaze nudge from outside (-1..1), e.g. while the robot turns. */
     var lookX by mutableStateOf(0f)
     var lookY by mutableStateOf(0f)
+    /** 0..1 loudness while Stevo speaks: the filaments pulse with his voice. */
+    var talk by mutableStateOf(0f)
 
     fun set(e: Expr) { base = e; current = e; flashId++ }
     fun flash(e: Expr) { current = e; flashId++ }
@@ -141,10 +143,12 @@ private fun honeycomb(w: Float, h: Float): Path = Path().apply {
 }
 
 /** A glowing filament: wide faint passes for the glow, then the bright wire and its hot core. */
-private fun DrawScope.filament(path: Path, alpha: Float) {
-    if (alpha <= 0.01f) return
+private fun DrawScope.filament(path: Path, intensity: Float) {
+    if (intensity <= 0.01f) return
+    val alpha = intensity.coerceAtMost(1f)
+    val boost = (intensity - 1f).coerceAtLeast(0f) * 3f // louder voice → wider glow
     val cap = StrokeCap.Round; val join = StrokeJoin.Round
-    drawPath(path, Glow, alpha = 0.06f * alpha, style = Stroke(26f, cap = cap, join = join))
+    drawPath(path, Glow, alpha = 0.06f * alpha + 0.08f * boost, style = Stroke(26f + 10f * boost, cap = cap, join = join))
     drawPath(path, Glow, alpha = 0.12f * alpha, style = Stroke(16f, cap = cap, join = join))
     drawPath(path, Glow, alpha = 0.28f * alpha, style = Stroke(10f, cap = cap, join = join))
     drawPath(path, Filament, alpha = alpha, style = Stroke(5.5f, cap = cap, join = join))
@@ -212,14 +216,15 @@ fun NixieFace(state: FaceState, modifier: Modifier = Modifier.fillMaxSize()) {
             val gx = (gazeX.value + state.lookX).coerceIn(-1.3f, 1.3f) * 16f
             val gy = (gazeY.value + state.lookY).coerceIn(-1.3f, 1.3f) * 10f
             val p = swap.value
-            val f = flicker.value
+            val t = state.talk
+            val f = (flicker.value + t * 0.25f).coerceAtMost(1.2f)
             for ((expr, a) in listOf(previous to (1f - p), shown to p)) {
                 if (a <= 0.01f) continue
                 for ((part, path) in SHAPES[expr]!!) {
                     val cx = if (part == Part.L) LX else RX
                     withTransform({
                         translate(gx, gy)
-                        scale(1f, blink.value, pivot = Offset(cx, CY))
+                        scale(1f + t * 0.06f, blink.value * (1f + t * 0.16f), pivot = Offset(cx, CY))
                     }) { filament(path, a * f) }
                 }
             }

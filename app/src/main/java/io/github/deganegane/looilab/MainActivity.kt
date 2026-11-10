@@ -29,7 +29,20 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private lateinit var ble: LooiBle
+    private lateinit var brain: StevoBrain
     private val face = FaceState()
+
+    private val askMic =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+            if (ok) brain.start() else ble.note("!!", "bez mikrofona Stevo ne čuje")
+        }
+
+    /** Start or end a conversation (asks for the mic the first time). */
+    private fun talk() {
+        if (brain.state.value != TalkState.OFF) brain.stop("· razgovor prekinut")
+        else if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) brain.start()
+        else askMic.launch(Manifest.permission.RECORD_AUDIO)
+    }
 
     private val permissions = if (Build.VERSION.SDK_INT >= 31) {
         arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
@@ -52,6 +65,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         ble = LooiBle(applicationContext)
+        brain = StevoBrain(applicationContext, face, ble)
         setContent {
             var faceMode by remember { mutableStateOf(false) }
 
@@ -69,6 +83,8 @@ class MainActivity : ComponentActivity() {
                 LabScreen(
                     ble = ble,
                     face = face,
+                    brain = brain,
+                    onTalk = { talk() },
                     onConnect = {
                         if (hasPermissions()) ble.scanAndConnect() else askPermissions.launch(permissions)
                     },
@@ -78,7 +94,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** The robot's face: landscape, no system bars, screen kept on. Tap = happy nod, long press = love. */
+    /** The robot's face: landscape, no system bars, screen kept on. Tap = talk to Stevo, long press = love. */
     @androidx.compose.runtime.Composable
     private fun FullscreenFace(onExit: () -> Unit) {
         BackHandler(onBack = onExit)
@@ -98,10 +114,7 @@ class MainActivity : ComponentActivity() {
             face,
             Modifier.fillMaxSize().pointerInput(Unit) {
                 detectTapGestures(
-                    onTap = {
-                        face.flash(Expr.HAPPY)
-                        ble.launch { playScript(CapturedAnims.all[1].keyframes, "dodir → klimanje") }
-                    },
+                    onTap = { talk() },
                     onLongPress = {
                         face.flash(Expr.LOVE)
                         ble.launch { playScript(CapturedAnims.all[21].keyframes, "dugi dodir → gore, kimne") }
@@ -112,7 +125,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        if (isFinishing) ble.disconnect()
+        if (isFinishing) { brain.stop(""); ble.disconnect() }
         super.onDestroy()
     }
 }

@@ -34,7 +34,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
+import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.Switch
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
@@ -65,25 +67,26 @@ private val Accent = Color(0xFF5CE1E6)
 private val Panel = Color(0xFF1B2230)
 
 @Composable
-fun LabScreen(ble: LooiBle, face: FaceState, onConnect: () -> Unit, onFullscreen: () -> Unit) {
+fun LabScreen(ble: LooiBle, face: FaceState, brain: StevoBrain, onTalk: () -> Unit, onConnect: () -> Unit, onFullscreen: () -> Unit) {
     MaterialTheme(colorScheme = darkColorScheme(primary = Accent, background = Color(0xFF0E1116), surface = Panel)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.safeDrawingPadding().padding(12.dp)) {
                 Header(ble, onConnect)
                 Spacer(Modifier.height(8.dp))
                 var tab by remember { mutableIntStateOf(0) }
-                TabRow(selectedTabIndex = tab, containerColor = Color.Transparent) {
-                    listOf("Lice", "Pokret", "Animacije", "Kanali", "Sirovo").forEachIndexed { i, t ->
+                ScrollableTabRow(selectedTabIndex = tab, containerColor = Color.Transparent, edgePadding = 0.dp) {
+                    listOf("Stevo", "Lice", "Pokret", "Animacije", "Kanali", "Sirovo").forEachIndexed { i, t ->
                         Tab(selected = tab == i, onClick = { tab = i }, text = { Text(t, fontSize = 13.sp, maxLines = 1) })
                     }
                 }
                 Spacer(Modifier.height(8.dp))
                 Box(Modifier.fillMaxWidth().weight(0.55f)) {
                     when (tab) {
-                        0 -> FaceTab(face, onFullscreen)
-                        1 -> DriveTab(ble, face)
-                        2 -> AnimTab(ble)
-                        3 -> ChannelTab(ble)
+                        0 -> StevoTab(brain, onTalk, onFullscreen)
+                        1 -> FaceTab(face, onFullscreen)
+                        2 -> DriveTab(ble, face)
+                        3 -> AnimTab(ble)
+                        4 -> ChannelTab(ble)
                         else -> RawTab(ble)
                     }
                 }
@@ -121,6 +124,71 @@ private fun Header(ble: LooiBle, onConnect: () -> Unit) {
     }
 }
 
+// ------------------------------------------------------------------ Stevo (Gemini Live)
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun StevoTab(brain: StevoBrain, onTalk: () -> Unit, onFullscreen: () -> Unit) {
+    val state by brain.state.collectAsState()
+    val lines by brain.transcript.collectAsState()
+    var key by remember { mutableStateOf(brain.apiKey) }
+    var name by remember { mutableStateOf(brain.name) }
+    var voice by remember { mutableStateOf(brain.voice) }
+    var interrupt by remember { mutableStateOf(brain.allowInterrupt) }
+    LazyColumn {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onTalk, enabled = state != TalkState.CONNECTING) {
+                    Text(if (state == TalkState.OFF) "🎙 Razgovaraj" else "■ Kraj")
+                }
+                Text(
+                    when (state) {
+                        TalkState.OFF -> "ne sluša"
+                        TalkState.CONNECTING -> "spajam se na Gemini…"
+                        TalkState.LISTENING -> "sluša te"
+                        TalkState.SPEAKING -> "govori"
+                    },
+                    color = if (state == TalkState.OFF) Color.Gray else Accent, fontSize = 13.sp,
+                )
+                Spacer(Modifier.weight(1f))
+                OutlinedButton(onClick = onFullscreen) { Text("Lice") }
+            }
+            Spacer(Modifier.height(6.dp))
+            lines.takeLast(8).forEach { l ->
+                Text(l, fontSize = 13.sp, color = if (l.startsWith("ti:")) Color.White else if (l.startsWith("·") || l.startsWith("⚠")) Color.Gray else Accent)
+            }
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(
+                value = key, onValueChange = { key = it }, singleLine = true,
+                label = { Text("Gemini API ključ (aistudio.google.com)") },
+                visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(),
+            )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { brain.apiKey = key }) { Text("Spremi ključ") }
+                if (brain.apiKey.isNotBlank()) Text("✓ spremljen", color = Color(0xFF7BE07B), fontSize = 12.sp)
+            }
+            OutlinedTextField(
+                value = name, onValueChange = { name = it; brain.name = it }, singleLine = true,
+                label = { Text("Ime robota") }, modifier = Modifier.fillMaxWidth(),
+            )
+            Text("Glas", fontSize = 12.sp, color = Color.Gray)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                StevoBrain.VOICES.forEach { v ->
+                    FilterChip(selected = voice == v, onClick = { voice = v; brain.voice = v }, label = { Text(v, fontSize = 12.sp) })
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Mogu ga prekinuti dok govori", fontSize = 13.sp)
+                    Text("Isključeno: mikrofon se gasi dok Stevo priča (nema jeke).", fontSize = 11.sp, color = Color.Gray)
+                }
+                Switch(checked = interrupt, onCheckedChange = { interrupt = it; brain.allowInterrupt = it })
+            }
+            Text("Glas i postavke vrijede od sljedećeg razgovora. Na licu: dodir = razgovor.", fontSize = 11.sp, color = Color.Gray)
+        }
+    }
+}
+
 // ------------------------------------------------------------------ face
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -140,7 +208,7 @@ private fun FaceTab(face: FaceState, onFullscreen: () -> Unit) {
         Spacer(Modifier.height(6.dp))
         Button(onClick = onFullscreen) { Text("Cijeli zaslon (stavi mobitel na robota)") }
         Text(
-            "Na cijelom zaslonu: dodir = sretno + klimanje, dugi dodir = zaljubljeno, natrag = izlaz.",
+            "Na cijelom zaslonu: dodir = razgovor, dugi dodir = zaljubljeno, natrag = izlaz.",
             fontSize = 12.sp, color = Color.Gray,
         )
     }
