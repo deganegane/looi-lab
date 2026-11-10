@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -97,7 +98,7 @@ class SettingsActions(
     val onApply: () -> Unit,
     val onPhoto: () -> Unit,
     val onDiagnostics: () -> Unit,
-    val onCharging: (Boolean) -> Unit,
+    val onLight: (String) -> Unit,
     val onExport: () -> Unit,
     val onImport: () -> Unit,
 )
@@ -147,8 +148,9 @@ private fun Hub(ble: LooiBle, brain: StevoBrain, memory: Memory, scroll: ScrollS
     val robot by ble.state.collectAsState()
     val notes by memory.notes.collectAsState()
     Scaffold(topBar = { TopBar("Postavke", a.onBack) }) { padding ->
+      Box(Modifier.fillMaxSize().padding(padding).background(MaterialTheme.colorScheme.background), contentAlignment = Alignment.TopCenter) {
         Column(
-            Modifier.fillMaxSize().padding(padding).background(MaterialTheme.colorScheme.background)
+            Modifier.widthIn(max = 720.dp).fillMaxWidth()
                 .verticalScroll(scroll).padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
             HubGroup(brain.name) {
@@ -162,7 +164,7 @@ private fun Hub(ble: LooiBle, brain: StevoBrain, memory: Memory, scroll: ScrollS
             HubGroup("Robot") {
                 HubRow(Icons.Rounded.Build, "Robot",
                     (if (robot == ConnState.READY) "Spojen" else if (robot == ConnState.SCANNING || robot == ConnState.CONNECTING) "Tražim…" else "Nije spojen") +
-                        if (brain.phoneCharging) " · puni mobitel" else " · ne puni mobitel") { onOpen(Page.ROBOT) }
+                        " · svjetlo: " + (LIGHT_MODES.firstOrNull { it.first == brain.lightMode }?.second ?: "")) { onOpen(Page.ROBOT) }
                 HubRow(Icons.Rounded.Face, "Kamera i zaslon",
                     listOf(if (brain.tracking) "Praćenje lica" else "Bez praćenja", if (brain.vision) "vidi" else "ne vidi",
                         if (brain.keepScreenOn) "ekran upaljen" else "ekran se gasi").joinToString(" · ")) { onOpen(Page.CAMERA) }
@@ -177,6 +179,7 @@ private fun Hub(ble: LooiBle, brain: StevoBrain, memory: Memory, scroll: ScrollS
                 modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
             )
         }
+      }
     }
 }
 
@@ -216,6 +219,7 @@ private fun SettingsPage(title: String, onBack: () -> Unit, content: @Composable
         Column(
             Modifier.fillMaxSize().padding(padding).background(MaterialTheme.colorScheme.background)
                 .verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp),
             content = content,
         )
@@ -225,7 +229,7 @@ private fun SettingsPage(title: String, onBack: () -> Unit, content: @Composable
 @Composable
 private fun AppCard(content: @Composable ColumnScope.() -> Unit) {
     Card(
-        Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.medium,
+        Modifier.widthIn(max = 720.dp).fillMaxWidth(), shape = MaterialTheme.shapes.medium,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
     ) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp), content = content) }
 }
@@ -291,6 +295,12 @@ private fun CharacterPage(brain: StevoBrain) {
         Hint("Opiši ga svojim riječima, može i na hrvatskom: \"Govori kao stari radijski spiker\", \"Šapuće i sve mu je tajna\", \"Pomalo je mrzovoljan prije kave\". Vrijedi od idućeg razgovora.")
         TextButton(onClick = { personality = StevoBrain.DEFAULT_PERSONALITY; brain.personality = personality }) { Text("Vrati zadano") }
     }
+    var swearing by remember { mutableStateOf(brain.swearing) }
+    AppCard {
+        SwitchRow("Smije psovati", "Prost i bezobrazan humor kao među prijateljima. Bez uvreda koje stvarno vrijeđaju.", swearing) {
+            swearing = it; brain.swearing = it
+        }
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -323,6 +333,8 @@ private fun VoicePage(brain: StevoBrain) {
         }
     }
 }
+
+private val LIGHT_MODES = listOf("off" to "Ugašeno", "on" to "Upaljeno", "auto" to "Automatski")
 
 private val dateFmt = SimpleDateFormat("d.M.yyyy. HH:mm", Locale.ROOT)
 
@@ -399,7 +411,7 @@ private fun Entry(text: String, date: String, onDelete: () -> Unit) {
 @Composable
 private fun RobotPage(ble: LooiBle, brain: StevoBrain, a: SettingsActions) {
     val robot by ble.state.collectAsState()
-    var charging by remember { mutableStateOf(brain.phoneCharging) }
+    var light by remember { mutableStateOf(brain.lightMode) }
     AppCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -416,9 +428,15 @@ private fun RobotPage(ble: LooiBle, brain: StevoBrain, a: SettingsActions) {
         }
     }
     AppCard {
-        SwitchRow("Punjenje mobitela", "Eksperimentalno. Isključi da baza ne troši svoju bateriju na mobitel.", charging) {
-            charging = it; brain.phoneCharging = it; a.onCharging(it)
-        }
+        CardTitle("Svjetlo")
+        Segments(LIGHT_MODES, light) { light = it; brain.lightMode = it; a.onLight(it) }
+        Hint(
+            when (light) {
+                "auto" -> "Upali ga kad kamera vidi mrak (treba praćenje lica ili \"Stevo vidi\"), ugasi kad je svijetlo ili kad spava."
+                "on" -> "Svjetlo stalno svijetli."
+                else -> "Svjetlo je ugašeno. Stevo ga i dalje može upaliti ako ga zamoliš."
+            }
+        )
     }
 }
 

@@ -143,8 +143,9 @@ class MainActivity : ComponentActivity() {
             bars.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             bars.hide(WindowInsetsCompat.Type.systemBars())
         } else {
+            // Settings turn with the phone (also when it lies on the robot); diagnostics stay upright.
             requestedOrientation = if (s == Screen.DIAGNOSTICS) ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-            else ActivityInfo.SCREEN_ORIENTATION_FULL_USER
+            else ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
             bars.show(WindowInsetsCompat.Type.systemBars())
         }
         applySettings()
@@ -163,17 +164,38 @@ class MainActivity : ComponentActivity() {
         eyes.rotation = displayRotation()
         tracking = Tracking(eyes, face, ble, mirror = { brain.mirror },
             bodyAllowed = { screen == Screen.FACE && !life.sleeping })
-        ble.onReady = { if (!brain.phoneCharging) setCharging(false) }
+        ble.onReady = { if (brain.lightMode == "on") setLight(true) }
 
         val reactions = Reactions(face) { block -> lifecycleScope.launch { block() } }
         lifecycleScope.launch {
+            var lastEdgeNote = 0L
             ble.events.collect { e ->
                 val type = e.firstOrNull()?.toInt()
                 if (type == 0x0A && e.getOrNull(1)?.toInt() == 1) life.wake()
+                // Reached the edge while driving: stop, and let him say so.
+                val now = System.currentTimeMillis()
+                if (type == 0x01 && ble.atEdge && now - ble.lastGestureAt < 4_000 && now - lastEdgeNote > 5_000) {
+                    lastEdgeNote = now
+                    ble.launch { stopScript() }
+                    face.flash(Expr.WORRIED)
+                    brain.notify("Your floor sensors: you just reached the edge of the table and stopped. Do not go further that way.")
+                }
                 if (!life.sleeping) reactions.on(e)
             }
         }
         life.start(lifecycleScope)
+        // The lamp in "auto": on when the camera sees darkness for a few seconds, off when bright.
+        lifecycleScope.launch {
+            var dark = 0; var bright = 0
+            while (true) {
+                delay(1_000)
+                if (brain.lightMode != "auto" || !eyes.running || ble.state.value != ConnState.READY) { dark = 0; bright = 0; continue }
+                val b = eyes.brightness
+                if (b < 0) continue
+                if (!ble.lightOn) { dark = if (b < 35) dark + 1 else 0; if (dark >= 3 && !life.sleeping) { dark = 0; ble.launch { setLight(true) } } }
+                else { bright = if (b > 150) bright + 1 else 0; if (bright >= 10 || life.sleeping) { bright = 0; ble.launch { setLight(false) } } }
+            }
+        }
         // Keep trying to reach the robot while the face is shown.
         lifecycleScope.launch {
             while (true) {
@@ -211,7 +233,7 @@ class MainActivity : ComponentActivity() {
                             },
                             onPhoto = { photo() },
                             onDiagnostics = { showScreen(Screen.DIAGNOSTICS) },
-                            onCharging = { on -> ble.launch { setCharging(on) } },
+                            onLight = { mode -> ble.launch { if (mode != "auto") setLight(mode == "on") } },
                             onExport = { exportMemory.launch("stevo-pamcenje.json") },
                             onImport = { importMemory.launch(arrayOf("application/json", "*/*")) },
                         ))

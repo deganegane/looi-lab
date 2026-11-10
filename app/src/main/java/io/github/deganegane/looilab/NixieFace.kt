@@ -37,6 +37,8 @@ import kotlin.random.Random
 enum class Expr(val label: String) {
     NEUTRAL("mirno"), HAPPY("sretno"), SURPRISED("iznenađeno"), SLEEPY("pospano"),
     CURIOUS("znatiželjno"), LOVE("zaljubljeno"), ANGRY("ljuto"), DIZZY("ošamućeno"),
+    SAD("tužno"), WINK("namig"), LAUGH("smijeh"), THINKING("razmišlja"), WORRIED("zabrinuto"),
+    BORED("dosadno"), EXCITED("oduševljeno"), CONFUSED("zbunjeno"), SHY("sramežljivo"),
 }
 
 /** What the face shows. [flash] shows an expression for a moment, then goes back to [base]. */
@@ -92,6 +94,30 @@ private fun poly(vararg p: Float) = Path().apply {
     close()
 }
 
+private fun arcDown(cx: Float, cy: Float, w: Float, h: Float) = Path().apply {
+    moveTo(cx - w / 2, cy); quadraticTo(cx, cy + h * 1.6f, cx + w / 2, cy)
+}
+
+/** ">" (pointing right) or "<": squeezed-shut laughing eyes. */
+private fun chevron(cx: Float, cy: Float, s: Float, right: Boolean) = Path().apply {
+    val d = if (right) 1 else -1
+    moveTo(cx - d * s * 0.7f, cy - s); lineTo(cx + d * s * 0.7f, cy); lineTo(cx - d * s * 0.7f, cy + s)
+}
+
+/** A four-pointed sparkle. */
+private fun star(cx: Float, cy: Float, r: Float) = Path().apply {
+    val k = r * 0.22f
+    moveTo(cx, cy - r)
+    quadraticTo(cx + k, cy - k, cx + r, cy); quadraticTo(cx + k, cy + k, cx, cy + r)
+    quadraticTo(cx - k, cy + k, cx - r, cy); quadraticTo(cx - k, cy - k, cx, cy - r); close()
+}
+
+/** Half-closed lid: flat top, round bottom. */
+private fun lid(cx: Float, cy: Float, w: Float, h: Float) = Path().apply {
+    moveTo(cx - w / 2, cy); lineTo(cx + w / 2, cy)
+    quadraticTo(cx + w / 2, cy + h, cx, cy + h); quadraticTo(cx - w / 2, cy + h, cx - w / 2, cy); close()
+}
+
 private fun spiral(cx: Float, cy: Float, r: Float) = Path().apply {
     val n = 120
     for (i in 0..n) {
@@ -114,6 +140,21 @@ private fun shapes(e: Expr): List<Pair<Part, Path>> = when (e) {
         Part.R to poly(RX + 30, CY - 24, RX - 30, CY - 2, RX - 30, CY + 40, RX + 30, CY + 40),
     )
     Expr.DIZZY -> listOf(Part.L to spiral(LX, CY, 36f), Part.R to spiral(RX, CY, 36f))
+    // Drooping outer corners.
+    Expr.SAD -> listOf(
+        Part.L to poly(LX - 30, CY - 2, LX + 30, CY - 20, LX + 30, CY + 34, LX - 30, CY + 34),
+        Part.R to poly(RX + 30, CY - 2, RX - 30, CY - 20, RX - 30, CY + 34, RX + 30, CY + 34),
+    )
+    Expr.WINK -> listOf(Part.L to pill(LX, CY, 46f, 86f), Part.R to arcUp(RX, CY + 14, 66f, 36f))
+    Expr.LAUGH -> listOf(Part.L to chevron(LX, CY, 30f, right = true), Part.R to chevron(RX, CY, 30f, right = false))
+    // Short eyes up and to the side, as if looking for the answer.
+    Expr.THINKING -> listOf(Part.L to pill(LX + 16, CY - 22, 40f, 46f), Part.R to pill(RX + 16, CY - 22, 40f, 46f))
+    Expr.WORRIED -> listOf(Part.L to circle(LX, CY + 4, 22f), Part.R to circle(RX, CY + 4, 22f))
+    Expr.BORED -> listOf(Part.L to lid(LX, CY + 6, 60f, 26f), Part.R to lid(RX, CY + 6, 60f, 26f))
+    Expr.EXCITED -> listOf(Part.L to star(LX, CY, 42f), Part.R to star(RX, CY, 42f))
+    Expr.CONFUSED -> listOf(Part.L to circle(LX, CY - 4, 34f), Part.R to line(RX - 26, CY + 12, RX + 26, CY - 4))
+    // Happy arcs, looking down and away.
+    Expr.SHY -> listOf(Part.L to arcDown(LX - 8, CY + 30, 50f, 18f), Part.R to arcDown(RX - 8, CY + 30, 50f, 18f))
 }
 
 private val SHAPES = Expr.entries.associateWith { shapes(it) }
@@ -177,7 +218,7 @@ fun NixieFace(state: FaceState, modifier: Modifier = Modifier.fillMaxSize()) {
     LaunchedEffect(Unit) {
         while (true) {
             delay(Random.nextLong(2_800, 6_500))
-            if (state.current == Expr.NEUTRAL || state.current == Expr.CURIOUS) {
+            if (state.current in setOf(Expr.NEUTRAL, Expr.CURIOUS, Expr.THINKING, Expr.WORRIED, Expr.CONFUSED, Expr.SAD)) {
                 blink.animateTo(0.06f, tween(70)); blink.animateTo(1f, tween(110))
                 if (Random.nextFloat() < 0.2f) { delay(120); blink.animateTo(0.06f, tween(70)); blink.animateTo(1f, tween(110)) }
             }

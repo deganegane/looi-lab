@@ -78,7 +78,8 @@ class Tracking(
         if (!canMove) { stopTurning(); return }
 
         // Turn: proportional, with a dead zone in the middle.
-        val rotate = if (abs(x) > 0.2f) (-x * 32).toInt().coerceIn(-28, 28) else 0 // + = left
+        // A brisk start (the base barely moves below ~15) and more speed the further off you are.
+        val rotate = if (abs(x) > 0.16f) (-Math.signum(x) * (18 + abs(x) * 52)).toInt().coerceIn(-65, 65) else 0 // + = left
         if (rotate != 0) { turning = true; ble.launch { move(rotate, 0) } } else stopTurning()
 
         // Head: small steps toward the face, at most ~3 times a second.

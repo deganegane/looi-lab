@@ -90,7 +90,14 @@ class StevoBrain(
         const val DEFAULT_PERSONALITY = "Playful, curious, warm, a bit cheeky and with dry humour, " +
             "never mean. You get excited about small things and you are proud of being a robot."
 
-        fun persona(name: String, personality: String, language: String, vision: Boolean, memory: String) = """
+        private fun swearRule(on: Boolean) = if (on)
+            "Crude language is fine with your owner: you may swear and use rude, cheeky humour the way " +
+                "close friends do, especially when they swear or ask you to. Never slurs, never hateful, " +
+                "never aimed to really hurt someone."
+        else
+            "Keep your language clean unless the person explicitly asks you to swear; then you may, playfully."
+
+        fun persona(name: String, personality: String, language: String, vision: Boolean, swearing: Boolean, memory: String) = """
             You are $name, a small desk robot. Your body is a little wheeled base that can drive,
             turn and tilt your head; your face is the phone screen on top of it, two glowing
             orange Nixie-tube eyes. You live on your owner's desk and you talk with them by voice.
@@ -101,13 +108,21 @@ class StevoBrain(
 
             ${cameraRule(vision)}
 
+            ${swearRule(swearing)}
+
             Talk like a friend, not like an assistant: short, spoken sentences, usually one to
             three. No lists, no markdown, no emojis. Ask a question back now and then.
 
             Your body is part of how you talk. Use the tools often and naturally:
-            set_expression to show what you feel (it changes your eyes), and move to nod,
-            shake your head, look up or down, turn, wiggle or dance. Do it while you speak,
-            e.g. nod when you agree, look up when you think, dance when something is great.
+            set_expression to show what you feel, and change it as the conversation changes:
+            happy or laugh at jokes, wink when you tease, thinking while you consider something,
+            sad or worried at bad news, excited at great news, confused when you do not get it,
+            shy at compliments, bored when teased about being boring, love when they are sweet,
+            sleepy at night, then back to neutral. Use move to nod, shake your head, look up or
+            down, turn, drive a little, wiggle or dance while you speak. You also have a lamp
+            (set_light) to see better in the dark or for fun.
+            Your floor sensors stop you at the edge of the table: if a move is refused because
+            you are at the edge, say so in your own words (e.g. that you would fall off).
             Never say the tool names out loud and never describe that you are calling them.
         """.trimIndent() + "\n\n" + memory
     }
@@ -139,10 +154,14 @@ class StevoBrain(
     var mirror: Boolean
         get() = prefs.getBoolean("mirror", false)
         set(v) = prefs.edit().putBoolean("mirror", v).apply()
-    /** Whether the base may charge the phone (experimental, FED2). */
-    var phoneCharging: Boolean
-        get() = prefs.getBoolean("charging", true)
-        set(v) = prefs.edit().putBoolean("charging", v).apply()
+    /** The base's lamp: "off", "on" or "auto" (on in the dark, seen through the camera). */
+    var lightMode: String
+        get() = prefs.getString("light", "auto") ?: "auto"
+        set(v) = prefs.edit().putString("light", v).apply()
+    /** He may swear and be crude when it fits (only if the owner wants that). */
+    var swearing: Boolean
+        get() = prefs.getBoolean("swearing", false)
+        set(v) = prefs.edit().putBoolean("swearing", v).apply()
     var keepScreenOn: Boolean
         get() = prefs.getBoolean("screen", true)
         set(v) = prefs.edit().putBoolean("screen", v).apply()
@@ -191,6 +210,12 @@ class StevoBrain(
         _transcript.update { (it + s).takeLast(30) }
     }
 
+    /** Tells Stevo (only while talking) about something that happened to his body. */
+    fun notify(event: String) {
+        if (!socketReady || _state.value == TalkState.OFF) return
+        ws?.send(JSONObject().put("realtimeInput", JSONObject().put("text", "[$event]")).toString())
+    }
+
     fun toggle() { if (_state.value == TalkState.OFF) start() else stop("") }
 
     fun start() {
@@ -235,7 +260,7 @@ class StevoBrain(
             .put("description", "Change your eyes to show a feeling. Use often.")
             .put("parameters", JSONObject().put("type", "OBJECT")
                 .put("properties", JSONObject().put("expression", enumParam(
-                    "neutral, happy, surprised, sleepy, curious, love, angry or dizzy",
+                    Expr.entries.joinToString(", ") { it.name.lowercase() },
                     Expr.entries.map { it.name.lowercase() })))
                 .put("required", JSONArray(listOf("expression"))))
         val move = JSONObject()
@@ -258,7 +283,13 @@ class StevoBrain(
             .put("parameters", JSONObject().put("type", "OBJECT")
                 .put("properties", JSONObject().put(param, JSONObject().put("type", "STRING").put("description", pdesc)))
                 .put("required", JSONArray(listOf(param))))
-        val tools = JSONArray().put(expr).put(move).put(photo)
+        val light = JSONObject()
+            .put("name", "set_light")
+            .put("description", "Switch the lamp on your base on or off.")
+            .put("parameters", JSONObject().put("type", "OBJECT")
+                .put("properties", JSONObject().put("on", JSONObject().put("type", "BOOLEAN")))
+                .put("required", JSONArray(listOf("on"))))
+        val tools = JSONArray().put(expr).put(move).put(photo).put(light)
         if (memory.level >= 1) {
             tools.put(textTool("remember", "Save something worth remembering about the person, for future conversations.",
                 "fact", "One short sentence, e.g. 'Has a cat called Mici.'"))
@@ -273,7 +304,7 @@ class StevoBrain(
                 .put("responseModalities", JSONArray(listOf("AUDIO")))
                 .put("speechConfig", JSONObject().put("voiceConfig", JSONObject()
                     .put("prebuiltVoiceConfig", JSONObject().put("voiceName", voice)))))
-            .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", persona(name, personality, language, vision, memory.promptSection())))))
+            .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", persona(name, personality, language, vision, swearing, memory.promptSection())))))
             .put("tools", JSONArray().put(JSONObject().put("functionDeclarations", tools)))
             .put("inputAudioTranscription", JSONObject())
             .put("outputAudioTranscription", JSONObject())
@@ -396,6 +427,8 @@ class StevoBrain(
                     val g = Gestures.all[args.optString("action")]
                     if (g == null) "unknown action"
                     else if (ble.state.value != ConnState.READY) "the robot base is not connected, only the face can move"
+                    else if (args.optString("action") in setOf("forward", "back", "dance", "wiggle") && ble.atEdge)
+                        "refused: you are standing at the edge of the table, the floor sensors see the drop. Tell the person you would fall off."
                     else { ble.launch { g(this) }; "ok" }
                 }
                 "take_photo" -> {
@@ -405,6 +438,10 @@ class StevoBrain(
                         else line("⚠ fotografija nije uspjela (je li kamera uključena?)")
                     }
                     "photo taken"
+                }
+                "set_light" -> {
+                    if (ble.state.value != ConnState.READY) "the robot base is not connected"
+                    else { val on = args.optBoolean("on"); ble.launch { setLight(on) }; if (on) "lamp on" else "lamp off" }
                 }
                 "remember" -> memory.remember(args.optString("fact")).also { if (it == "saved") line("🧠 ${args.optString("fact")}") }
                 "forget" -> memory.forget(args.optString("about"))

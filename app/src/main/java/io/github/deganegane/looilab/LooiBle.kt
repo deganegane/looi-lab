@@ -210,6 +210,7 @@ class LooiBle(private val context: Context) {
             val meaning = LooiProtocol.describeEvent(value)
             val key = value.firstOrNull()?.let { "%02x".format(it) } ?: "?"
             _sensors.update { it + (key to "${value.hex()}  →  $meaning") }
+            if (value.firstOrNull()?.toInt() == 0x01) floor = value.drop(1).map { it.toInt() == 1 }
             _events.tryEmit(value)
             note("◀", nameOf(uuid), value, meaning)
         } else if (uuid == LooiProtocol.CLOCK) {
@@ -300,11 +301,20 @@ class LooiBle(private val context: Context) {
 
     private var scriptId = 0x40
 
-    /**
-     * Phone charging from the base. Guess: FED2, which the official app wrote 00 now and then;
-     * 01 = on, 00 = off. To be confirmed on the robot.
-     */
-    suspend fun setCharging(on: Boolean) = write(LooiProtocol.FED2, byteArrayOf(if (on) 1 else 0))
+    /** The lamp on the base. */
+    @Volatile var lightOn = false
+        private set
+    suspend fun setLight(on: Boolean): Boolean {
+        val ok = write(LooiProtocol.LIGHT, byteArrayOf(if (on) 1 else 0))
+        if (ok) lightOn = on
+        return ok
+    }
+
+    /** Latest floor sensors (true = table under it); empty until the base reports. */
+    @Volatile var floor: List<Boolean> = emptyList()
+        private set
+    /** Standing, but part of him over the edge. */
+    val atEdge: Boolean get() = floor.isNotEmpty() && floor.any { !it } && floor.any { it }
 
     /** Runs once the handshake is done (e.g. settings that live on the base). */
     var onReady: (suspend LooiBle.() -> Unit)? = null

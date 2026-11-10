@@ -21,8 +21,8 @@ object LooiProtocol {
     val TILT: UUID = uuid16(0xFED1)
     /** Write-only, never used by the official app (to try). */
     val FED3: UUID = uuid16(0xFED3)
-    /** Written 00 by the app now and then (guess: some mode switch). */
-    val FED2: UUID = uuid16(0xFED2)
+    /** The base's lamp: 01 on, 00 off (confirmed 2026-11-10). LOOI lit it to see in the dark. */
+    val LIGHT: UUID = uuid16(0xFED2)
     /** Motion scripts ("animations"), written with response in 20-byte fragments. */
     val SCRIPT: UUID = uuid16(0xFE00)
     /** Read by the app every 30 s, answers 00 01 (guess: status / keep-alive). */
@@ -35,7 +35,7 @@ object LooiProtocol {
     val CLOCK: UUID = uuid16(0xFEF0)
 
     val ALL_KNOWN = listOf(
-        "FED0 rotacija" to ROTATE, "FED1 glava" to TILT, "FED2" to FED2, "FED3" to FED3,
+        "FED0 rotacija" to ROTATE, "FED1 glava" to TILT, "FED2 svjetlo" to LIGHT, "FED3" to FED3,
         "FE00 skripte" to SCRIPT, "FED8 status" to STATUS, "FED9 događaji" to EVENTS,
         "FEDA kontrola" to CONTROL, "FEF0 sat" to CLOCK,
     )

@@ -42,6 +42,10 @@ class CameraEyes(private val context: Context) {
     private val frameEveryMs = 1_500L
     private var lastFrame = 0L
 
+    /** Average brightness of what the camera sees, 0 (dark) … 255; -1 until known. */
+    @Volatile var brightness = -1f
+        private set
+
     private val exec = Executors.newSingleThreadExecutor()
     private val detector = FaceDetection.getClient(
         FaceDetectorOptions.Builder()
@@ -94,6 +98,12 @@ class CameraEyes(private val context: Context) {
         val upright = if (rot == 90 || rot == 270) img.height to img.width else img.width to img.height
 
         val now = System.currentTimeMillis()
+        runCatching {
+            val y = img.planes[0].buffer
+            var sum = 0L; var n = 0; var i = 0
+            while (i < y.limit()) { sum += (y.get(i).toInt() and 0xFF); n++; i += 97 }
+            if (n > 0) brightness = brightness.let { b -> val v = sum / n.toFloat(); if (b < 0) v else b * 0.8f + v * 0.2f }
+        }
         val sink = onFrame
         if (sink != null && now - lastFrame >= frameEveryMs) {
             lastFrame = now
