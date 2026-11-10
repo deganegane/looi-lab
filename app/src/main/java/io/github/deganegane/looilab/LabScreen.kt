@@ -135,6 +135,8 @@ private fun StevoTab(brain: StevoBrain, eyes: CameraEyes, onTalk: () -> Unit, on
     var name by remember { mutableStateOf(brain.name) }
     var voice by remember { mutableStateOf(brain.voice) }
     var lang by remember { mutableStateOf(brain.language) }
+    var speed by remember { mutableFloatStateOf(brain.speed) }
+    var pitch by remember { mutableFloatStateOf(brain.pitch) }
     var interrupt by remember { mutableStateOf(brain.allowInterrupt) }
     var tracking by remember { mutableStateOf(brain.tracking) }
     var vision by remember { mutableStateOf(brain.vision) }
@@ -189,6 +191,13 @@ private fun StevoTab(brain: StevoBrain, eyes: CameraEyes, onTalk: () -> Unit, on
                     FilterChip(selected = voice == v, onClick = { voice = v; brain.voice = v }, label = { Text(v, fontSize = 12.sp) })
                 }
             }
+            Text("Brzina govora: ${"%.2f".format(speed)}×", fontSize = 13.sp)
+            Slider(value = speed, onValueChange = { speed = it }, valueRange = 0.7f..1.6f,
+                onValueChangeFinished = { brain.speed = speed })
+            Text("Visina glasa: ${"%.2f".format(pitch)}×  (više = sitniji, robotskiji)", fontSize = 13.sp)
+            Slider(value = pitch, onValueChange = { pitch = it }, valueRange = 0.6f..1.8f,
+                onValueChangeFinished = { brain.pitch = pitch })
+            TextButtonRow(onReset = { speed = 1f; pitch = 1f; brain.speed = 1f; brain.pitch = 1f })
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Mogu ga prekinuti dok govori", fontSize = 13.sp)
@@ -221,6 +230,13 @@ private fun StevoTab(brain: StevoBrain, eyes: CameraEyes, onTalk: () -> Unit, on
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun TextButtonRow(onReset: () -> Unit) {
+    OutlinedButton(onClick = onReset, contentPadding = ButtonDefaults.TextButtonContentPadding) {
+        Text("Vrati brzinu i visinu na 1×", fontSize = 12.sp)
     }
 }
 

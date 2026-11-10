@@ -139,6 +139,21 @@ class StevoBrain(
     var voice: String
         get() = prefs.getString("voice", "Puck") ?: "Puck"
         set(v) = prefs.edit().putString("voice", v).apply()
+    /** Voice speed and pitch, applied on the phone to Gemini's audio (1.0 = as Gemini speaks). */
+    var speed: Float
+        get() = prefs.getFloat("speed", 1.0f)
+        set(v) { prefs.edit().putFloat("speed", v).apply(); applyVoiceParams() }
+    var pitch: Float
+        get() = prefs.getFloat("pitch", 1.0f)
+        set(v) { prefs.edit().putFloat("pitch", v).apply(); applyVoiceParams() }
+
+    private fun applyVoiceParams() {
+        val t = track ?: return
+        runCatching {
+            t.playbackParams = android.media.PlaybackParams().setSpeed(speed).setPitch(pitch)
+        }
+    }
+
     var allowInterrupt: Boolean
         get() = prefs.getBoolean("interrupt", false)
         set(v) = prefs.edit().putBoolean("interrupt", v).apply()
@@ -371,7 +386,9 @@ class StevoBrain(
             .setBufferSizeInBytes(outMin * 4)
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
-        t.play(); track = t
+        track = t
+        applyVoiceParams()
+        t.play()
 
         playThread = Thread {
             while (running) {
