@@ -25,6 +25,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private lateinit var ble: LooiBle
@@ -55,19 +56,11 @@ class MainActivity : ComponentActivity() {
             var faceMode by remember { mutableStateOf(false) }
 
             // The face reacts to what the base reports.
+            //  - 0A 01 / 0A 00: lifted / put down (confirmed 2026-11-10);
+            //  - 01 a b c d: four floor sensors, 01 = surface under it, 00 = air.
             LaunchedEffect(Unit) {
-                var lastCurious = 0L
-                ble.events.collect { e ->
-                    val type = e.firstOrNull()?.toInt()?.and(0xFF) ?: return@collect
-                    val v = e.getOrNull(1)?.toInt() ?: 0
-                    when {
-                        type in 0x09..0x0B && v == 1 -> face.flash(Expr.SURPRISED)
-                        type == 0x01 && System.currentTimeMillis() - lastCurious > 4_000 -> {
-                            lastCurious = System.currentTimeMillis()
-                            face.flash(Expr.CURIOUS)
-                        }
-                    }
-                }
+                val r = Reactions(face) { block -> launch { block() } }
+                ble.events.collect { r.on(it) }
             }
 
             if (faceMode) {

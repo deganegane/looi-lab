@@ -79,15 +79,15 @@ object LooiProtocol {
         if (b.isEmpty()) return "prazno"
         val u = { i: Int -> b.getOrNull(i)?.toInt()?.and(0xFF) }
         return when (u(0)) {
-            0x01 -> "senzori: " + (1 until b.size).joinToString(" ") { if (u(it) == 1) "■" else "□" } +
-                "  (rub stola?)"
+            0x01 -> "pod: " + (1 until b.size).joinToString(" ") { if (u(it) == 1) "■" else "□" } +
+                "  (■ stol, □ zrak)"
             0x02 -> if (b.size >= 3) {
                 val s = ((u(1)!! shl 8) or u(2)!!).toShort().toInt()
                 "analogno: $s  (nagib?)"
             } else "analogno"
             0x07 -> "skripta #${u(1)} gotova"
             0x09 -> "događaj 09 = ${u(1)}"
-            0x0A -> "događaj 0A = ${u(1)}"
+            0x0A -> if (u(1) == 1) "podignut" else "spušten"
             0x0B -> "događaj 0B = ${u(1)}"
             0x11 -> "status 11: ${b.drop(1).joinToString(" ") { "%02x".format(it) }}"
             else -> "nepoznato"
