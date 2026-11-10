@@ -288,10 +288,11 @@ class LooiBle(private val context: Context) {
 
     private var scriptId = 0x40
 
-    suspend fun drive(speed: Int, turn: Int) {
+    /** [rotate]: + = left; [tilt]: + = head down. */
+    suspend fun move(rotate: Int, tilt: Int) {
         if (_state.value != ConnState.READY) return
-        write(LooiProtocol.DRIVE_SPEED, LooiProtocol.driveValue(speed), withResponse = false, quiet = true)
-        write(LooiProtocol.DRIVE_TURN, LooiProtocol.driveValue(turn), withResponse = false, quiet = true)
+        write(LooiProtocol.ROTATE, LooiProtocol.driveValue(rotate), withResponse = false, quiet = true)
+        write(LooiProtocol.TILT, LooiProtocol.driveValue(tilt), withResponse = false, quiet = true)
     }
 
     suspend fun stopScript() = write(LooiProtocol.SCRIPT, LooiProtocol.STOP_SCRIPT)

@@ -14,8 +14,8 @@ Service `0x00FF`, no pairing, no encryption.
 
 | Char | Use |
 |------|-----|
-| `FED0` | drive speed, `00 <int8>`, write without response |
-| `FED1` | turn, `00 <int8>`, write without response |
+| `FED0` | rotation, `00 <int8>` (+ left, − right), write without response |
+| `FED1` | head tilt, `00 <int8>` (− up, + down), write without response |
 | `FE00` | motion script: `[fragment, script id, keyframes…]`, keyframe = `(tick, int8 value, channel)`, tick ≈ 40 ms, `ff 00 ch` ends a channel; `00 00 01 ff 00 01` stops |
 | `FED9` | notify: `01 a b c d` four sensors (edge?), `02 hi lo` analog (tilt?), `07 id 00` script done, `09/0A/0B x` events |
 | `FEDA` | control: `03` hello, `81 01` start |

@@ -15,10 +15,12 @@ object LooiProtocol {
     val SERVICE: UUID = uuid16(0x00FF)
     val CCCD: UUID = uuid16(0x2902)
 
-    /** Drive: forward/back speed, written without response every ~50 ms while driving. */
-    val DRIVE_SPEED: UUID = uuid16(0xFED0)
-    /** Drive: turn rate, written right after DRIVE_SPEED. */
-    val DRIVE_TURN: UUID = uuid16(0xFED1)
+    /** Rotation, written without response every ~50 ms while held: + = left, - = right (confirmed). */
+    val ROTATE: UUID = uuid16(0xFED0)
+    /** Head tilt, written right after ROTATE: - = up, + = down (confirmed). */
+    val TILT: UUID = uuid16(0xFED1)
+    /** Write-only, never used by the official app (to try). */
+    val FED3: UUID = uuid16(0xFED3)
     /** Written 00 by the app now and then (guess: some mode switch). */
     val FED2: UUID = uuid16(0xFED2)
     /** Motion scripts ("animations"), written with response in 20-byte fragments. */
@@ -33,7 +35,7 @@ object LooiProtocol {
     val CLOCK: UUID = uuid16(0xFEF0)
 
     val ALL_KNOWN = listOf(
-        "FED0 vožnja" to DRIVE_SPEED, "FED1 skretanje" to DRIVE_TURN, "FED2" to FED2,
+        "FED0 rotacija" to ROTATE, "FED1 glava" to TILT, "FED2" to FED2, "FED3" to FED3,
         "FE00 skripte" to SCRIPT, "FED8 status" to STATUS, "FED9 događaji" to EVENTS,
         "FEDA kontrola" to CONTROL, "FEF0 sat" to CLOCK,
     )

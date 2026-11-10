@@ -69,7 +69,7 @@ fun LabScreen(ble: LooiBle, onConnect: () -> Unit) {
                 Spacer(Modifier.height(8.dp))
                 var tab by remember { mutableIntStateOf(0) }
                 TabRow(selectedTabIndex = tab, containerColor = Color.Transparent) {
-                    listOf("Vožnja", "Animacije", "Kanali", "Sirovo").forEachIndexed { i, t ->
+                    listOf("Pokret", "Animacije", "Kanali", "Sirovo").forEachIndexed { i, t ->
                         Tab(selected = tab == i, onClick = { tab = i }, text = { Text(t) })
                     }
                 }
@@ -128,13 +128,14 @@ private fun DriveTab(ble: LooiBle) {
     LaunchedEffect(active) {
         if (active) {
             while (true) {
-                val speed = (-stick.y * maxSpeed).roundToInt()
-                val turn = (stick.x * maxSpeed).roundToInt()
-                ble.launch { drive(speed, turn) }
+                // Stick right = rotate right, stick up = head up.
+                val rotate = (-stick.x * maxSpeed).roundToInt()
+                val tilt = (stick.y * maxSpeed).roundToInt()
+                ble.launch { move(rotate, tilt) }
                 delay(60)
             }
         } else {
-            repeat(3) { ble.launch { drive(0, 0) }; delay(60) }
+            repeat(3) { ble.launch { move(0, 0) }; delay(60) }
         }
     }
 
@@ -167,13 +168,13 @@ private fun DriveTab(ble: LooiBle) {
         }
         Spacer(Modifier.width(16.dp))
         Column(Modifier.weight(1f)) {
-            Text("Brzina: ${(-stick.y * maxSpeed).roundToInt()}", fontFamily = FontFamily.Monospace)
-            Text("Skretanje: ${(stick.x * maxSpeed).roundToInt()}", fontFamily = FontFamily.Monospace)
+            Text("Rotacija: ${(-stick.x * maxSpeed).roundToInt()}", fontFamily = FontFamily.Monospace)
+            Text("Glava: ${(stick.y * maxSpeed).roundToInt()}", fontFamily = FontFamily.Monospace)
             Spacer(Modifier.height(12.dp))
-            Text("Najveća brzina: ${maxSpeed.roundToInt()} / 127", fontSize = 13.sp)
+            Text("Najveća snaga: ${maxSpeed.roundToInt()} / 127", fontSize = 13.sp)
             Slider(value = maxSpeed, onValueChange = { maxSpeed = it }, valueRange = 10f..127f)
             Text(
-                "Službena aplikacija je slala do ~75. Kreni polako, robot je na stolu!",
+                "← → okretanje u mjestu, ↑ ↓ glava gore/dolje.",
                 fontSize = 12.sp, color = Color.Gray,
             )
         }
@@ -226,7 +227,7 @@ private fun ChannelTab(ble: LooiBle) {
     Column {
         Text(
             "Drži jedan kanal na vrijednosti neko vrijeme. Tako otkrivamo što je koji kanal " +
-                "(pretpostavka: 1 = nagib glave, 2 = okret, 3 = naprijed).",
+                "(pretpostavka: 1 = glava, 2 = okret, 3 = vožnja naprijed?).",
             fontSize = 12.sp, color = Color.Gray,
         )
         Spacer(Modifier.height(6.dp))
