@@ -43,6 +43,9 @@ class StevoBrain(
     private val context: Context,
     private val face: FaceState,
     private val ble: LooiBle,
+    private val eyes: CameraEyes,
+    /** Takes a photo; the callback gets the file name or null. */
+    private val takePhoto: ((String?) -> Unit) -> Unit,
 ) {
     companion object {
         const val MODEL = "models/gemini-3.8-live"
@@ -72,7 +75,16 @@ class StevoBrain(
 
         val VOICES = listOf("Puck", "Charon", "Fenrir", "Orus", "Kore", "Aoede")
 
-        fun persona(name: String, language: String) = """
+        private fun cameraRule(vision: Boolean) = if (vision)
+            "You can see through the camera in your face: you receive a picture every second or two. " +
+                "Look at the person and comment on what you see when it fits. When you see something " +
+                "beautiful, funny or special you may take a photo with take_photo on your own (at most " +
+                "once every few minutes), and always when the person asks for a photo."
+        else
+            "You cannot see right now, but you have a camera: when the person asks for a photo, " +
+                "take it with take_photo."
+
+        fun persona(name: String, language: String, vision: Boolean) = """
             You are $name, a small desk robot. Your body is a little wheeled base that can drive,
             turn and tilt your head; your face is the phone screen on top of it, two glowing
             orange Nixie-tube eyes. You live on your owner's desk and you talk with them by voice.
@@ -81,6 +93,8 @@ class StevoBrain(
             You get excited about small things and you are proud of being a robot.
 
             ${languageRule(language)}
+
+            ${cameraRule(vision)}
 
             Talk like a friend, not like an assistant: short, spoken sentences, usually one to
             three. No lists, no markdown, no emojis. Ask a question back now and then.
@@ -107,6 +121,18 @@ class StevoBrain(
     var name: String
         get() = prefs.getString("name", "Stevo")?.takeIf { it.isNotBlank() } ?: "Stevo"
         set(v) = prefs.edit().putString("name", v.trim()).apply()
+    var vision: Boolean
+        get() = prefs.getBoolean("vision", false)
+        set(v) = prefs.edit().putBoolean("vision", v).apply()
+    var tracking: Boolean
+        get() = prefs.getBoolean("tracking", true)
+        set(v) = prefs.edit().putBoolean("tracking", v).apply()
+    var mirror: Boolean
+        get() = prefs.getBoolean("mirror", false)
+        set(v) = prefs.edit().putBoolean("mirror", v).apply()
+    var keepScreenOn: Boolean
+        get() = prefs.getBoolean("screen", true)
+        set(v) = prefs.edit().putBoolean("screen", v).apply()
     var language: String
         get() = prefs.getString("lang", "hr") ?: "hr"
         set(v) = prefs.edit().putString("lang", v).apply()
@@ -150,6 +176,7 @@ class StevoBrain(
     fun stop(reason: String) {
         if (!running && _state.value == TalkState.OFF) return
         running = false
+        eyes.onFrame = null
         ws?.close(1000, "bye"); ws = null
         recordThread?.interrupt(); recordThread = null
         playQueue.clear(); playQueue.offer(ByteArray(0))
@@ -185,14 +212,20 @@ class StevoBrain(
                         "forward, back = a little drive, wiggle = excited, dance = celebrate",
                     Gestures.all.keys.toList())))
                 .put("required", JSONArray(listOf("action"))))
+        val photo = JSONObject()
+            .put("name", "take_photo")
+            .put("description", "Take a photo with your face camera and save it to the gallery.")
+            .put("parameters", JSONObject().put("type", "OBJECT")
+                .put("properties", JSONObject().put("reason", JSONObject().put("type", "STRING")
+                    .put("description", "Why: what is in the photo, in a few words"))))
         val setup = JSONObject()
             .put("model", MODEL)
             .put("generationConfig", JSONObject()
                 .put("responseModalities", JSONArray(listOf("AUDIO")))
                 .put("speechConfig", JSONObject().put("voiceConfig", JSONObject()
                     .put("prebuiltVoiceConfig", JSONObject().put("voiceName", voice)))))
-            .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", persona(name, language)))))
-            .put("tools", JSONArray().put(JSONObject().put("functionDeclarations", JSONArray().put(expr).put(move))))
+            .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", persona(name, language, vision)))))
+            .put("tools", JSONArray().put(JSONObject().put("functionDeclarations", JSONArray().put(expr).put(move).put(photo))))
             .put("inputAudioTranscription", JSONObject())
             .put("outputAudioTranscription", JSONObject())
         return JSONObject().put("setup", setup).toString()
@@ -222,7 +255,11 @@ class StevoBrain(
         val msg = runCatching { JSONObject(text) }.getOrNull() ?: return
         when {
             msg.has("setupComplete") -> {
-                line("· $name sluša")
+                line("· $name sluša" + if (vision) " i gleda" else "")
+                if (vision) eyes.onFrame = { jpg ->
+                    val b64 = Base64.encodeToString(jpg, Base64.NO_WRAP)
+                    ws?.send("""{"realtimeInput":{"video":{"mimeType":"image/jpeg","data":"$b64"}}}""")
+                }
                 startAudio()
                 _state.value = TalkState.LISTENING
             }
@@ -280,6 +317,14 @@ class StevoBrain(
                     if (g == null) "unknown action"
                     else if (ble.state.value != ConnState.READY) "the robot base is not connected, only the face can move"
                     else { ble.launch { g(this) }; "ok" }
+                }
+                "take_photo" -> {
+                    face.flash(Expr.SURPRISED)
+                    takePhoto { file ->
+                        if (file != null) { line("📷 $file"); face.flash(Expr.HAPPY) }
+                        else line("⚠ fotografija nije uspjela (je li kamera uključena?)")
+                    }
+                    "photo taken"
                 }
                 else -> "unknown tool"
             }
@@ -392,8 +437,8 @@ object Gestures {
         "look_down" to anim(7),
         "turn_left" to anim(4),
         "turn_right" to anim(5),
-        "forward" to anim(20),
-        "back" to anim(10),
+        "forward" to anim(15),
+        "back" to anim(3),
         "wiggle" to anim(11),
         "dance" to anim(23),
     )

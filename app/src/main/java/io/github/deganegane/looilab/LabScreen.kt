@@ -67,7 +67,7 @@ private val Accent = Color(0xFF5CE1E6)
 private val Panel = Color(0xFF1B2230)
 
 @Composable
-fun LabScreen(ble: LooiBle, face: FaceState, brain: StevoBrain, onTalk: () -> Unit, onConnect: () -> Unit, onFullscreen: () -> Unit) {
+fun LabScreen(ble: LooiBle, face: FaceState, brain: StevoBrain, eyes: CameraEyes, onTalk: () -> Unit, onConnect: () -> Unit, onFullscreen: () -> Unit, onSettings: () -> Unit, onPhoto: () -> Unit) {
     MaterialTheme(colorScheme = darkColorScheme(primary = Accent, background = Color(0xFF0E1116), surface = Panel)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.safeDrawingPadding().padding(12.dp)) {
@@ -82,7 +82,7 @@ fun LabScreen(ble: LooiBle, face: FaceState, brain: StevoBrain, onTalk: () -> Un
                 Spacer(Modifier.height(8.dp))
                 Box(Modifier.fillMaxWidth().weight(0.55f)) {
                     when (tab) {
-                        0 -> StevoTab(brain, onTalk, onFullscreen)
+                        0 -> StevoTab(brain, eyes, onTalk, onFullscreen, onSettings, onPhoto)
                         1 -> FaceTab(face, onFullscreen)
                         2 -> DriveTab(ble, face)
                         3 -> AnimTab(ble)
@@ -128,7 +128,7 @@ private fun Header(ble: LooiBle, onConnect: () -> Unit) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun StevoTab(brain: StevoBrain, onTalk: () -> Unit, onFullscreen: () -> Unit) {
+private fun StevoTab(brain: StevoBrain, eyes: CameraEyes, onTalk: () -> Unit, onFullscreen: () -> Unit, onSettings: () -> Unit, onPhoto: () -> Unit) {
     val state by brain.state.collectAsState()
     val lines by brain.transcript.collectAsState()
     var key by remember { mutableStateOf(brain.apiKey) }
@@ -136,6 +136,11 @@ private fun StevoTab(brain: StevoBrain, onTalk: () -> Unit, onFullscreen: () -> 
     var voice by remember { mutableStateOf(brain.voice) }
     var lang by remember { mutableStateOf(brain.language) }
     var interrupt by remember { mutableStateOf(brain.allowInterrupt) }
+    var tracking by remember { mutableStateOf(brain.tracking) }
+    var vision by remember { mutableStateOf(brain.vision) }
+    var mirror by remember { mutableStateOf(brain.mirror) }
+    var screen by remember { mutableStateOf(brain.keepScreenOn) }
+    val seen by eyes.face.collectAsState()
     LazyColumn {
         item {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -192,7 +197,41 @@ private fun StevoTab(brain: StevoBrain, onTalk: () -> Unit, onFullscreen: () -> 
                 Switch(checked = interrupt, onCheckedChange = { interrupt = it; brain.allowInterrupt = it })
             }
             Text("Glas i postavke vrijede od sljedećeg razgovora. Na licu: dodir = razgovor.", fontSize = 11.sp, color = Color.Gray)
+            Spacer(Modifier.height(10.dp))
+            Text("Kamera i ekran", fontSize = 12.sp, color = Accent)
+            SettingSwitch("Praćenje lica", "Okreće se i gleda prema tebi (na mobitelu, bez interneta).", tracking) {
+                tracking = it; brain.tracking = it; onSettings()
+            }
+            SettingSwitch("Zrcali smjer", "Uključi ako se okreće od tebe umjesto prema tebi.", mirror) {
+                mirror = it; brain.mirror = it
+            }
+            SettingSwitch("Stevo vidi", "Dok razgovarate, Gemini dobiva sličicu s kamere svakih 1,5 s (više tokena).", vision) {
+                vision = it; brain.vision = it; onSettings()
+            }
+            SettingSwitch("Ekran uvijek upaljen", "Ekran se ne gasi dok je aplikacija otvorena.", screen) {
+                screen = it; brain.keepScreenOn = it; onSettings()
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onPhoto) { Text("📷 Fotografiraj") }
+                val f = seen
+                Text(
+                    if (f != null && System.currentTimeMillis() - f.at < 1_000) "vidi lice: x ${"%.2f".format(f.x)}, y ${"%.2f".format(f.y)}"
+                    else if (eyes.running) "kamera radi, nema lica" else "kamera isključena",
+                    fontSize = 12.sp, color = Color.Gray,
+                )
+            }
         }
+    }
+}
+
+@Composable
+private fun SettingSwitch(title: String, hint: String, value: Boolean, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 13.sp)
+            Text(hint, fontSize = 11.sp, color = Color.Gray)
+        }
+        Switch(checked = value, onCheckedChange = onChange)
     }
 }
 
@@ -233,6 +272,7 @@ private fun DriveTab(ble: LooiBle, face: FaceState) {
     LaunchedEffect(active) {
         if (active) {
             while (true) {
+                ble.manualDrive = true
                 // The eyes look where the robot is going.
                 face.lookX = stick.x; face.lookY = stick.y
                 // Stick right = rotate right, stick up = head up.
@@ -244,6 +284,7 @@ private fun DriveTab(ble: LooiBle, face: FaceState) {
         } else {
             face.lookX = 0f; face.lookY = 0f
             repeat(3) { ble.launch { move(0, 0) }; delay(60) }
+            ble.manualDrive = false
         }
     }
 

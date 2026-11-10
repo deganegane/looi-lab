@@ -63,6 +63,9 @@ class LooiBle(private val context: Context) {
     private val _events = MutableSharedFlow<ByteArray>(extraBufferCapacity = 64)
     val events: SharedFlow<ByteArray> = _events
 
+    /** True while the joystick drives: face tracking keeps its hands off the motors. */
+    @Volatile var manualDrive = false
+
     var deviceName: String? = null
         private set
 
