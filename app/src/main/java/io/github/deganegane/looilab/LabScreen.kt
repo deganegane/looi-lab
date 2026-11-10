@@ -1,6 +1,8 @@
 package io.github.deganegane.looilab
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -167,7 +169,7 @@ private fun DriveTab(ble: LooiBle) {
             )
         }
         Spacer(Modifier.width(16.dp))
-        Column(Modifier.weight(1f)) {
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
             Text("Rotacija: ${(-stick.x * maxSpeed).roundToInt()}", fontFamily = FontFamily.Monospace)
             Text("Glava: ${(stick.y * maxSpeed).roundToInt()}", fontFamily = FontFamily.Monospace)
             Spacer(Modifier.height(12.dp))
@@ -176,6 +178,28 @@ private fun DriveTab(ble: LooiBle) {
             Text(
                 "← → okretanje u mjestu, ↑ ↓ glava gore/dolje.",
                 fontSize = 12.sp, color = Color.Gray,
+            )
+            Spacer(Modifier.height(8.dp))
+            // Driving goes through a short script on channel 1 (the joystick characteristics
+            // only rotate and tilt).
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Button(onClick = {
+                    val v = (maxSpeed * 0.6f).roundToInt()
+                    ble.launch { playScript(LooiProtocol.holdScript(1, v, 15), "Naprijed $v") }
+                }) { Text("▲ Naprijed") }
+                Button(onClick = {
+                    val v = -(maxSpeed * 0.6f).roundToInt()
+                    ble.launch { playScript(LooiProtocol.holdScript(1, v, 15), "Natrag $v") }
+                }) { Text("▼ Natrag") }
+            }
+            var head by remember { mutableFloatStateOf(50f) }
+            Text("Glava (položaj): ${head.roundToInt()}", fontSize = 13.sp)
+            Slider(
+                value = head, onValueChange = { head = it }, valueRange = 0f..100f,
+                onValueChangeFinished = {
+                    val h = head.roundToInt()
+                    ble.launch { playScript(LooiProtocol.holdScript(3, h, 10), "Glava na $h") }
+                },
             )
         }
     }
@@ -201,12 +225,12 @@ private fun AnimTab(ble: LooiBle) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 CapturedAnims.all.forEach { a ->
                     Button(
-                        onClick = { ble.launch { playScript(a.keyframes, "Animacija ${a.number}") } },
+                        onClick = { ble.launch { playScript(a.keyframes, "Animacija ${a.number} (${a.name})") } },
                         colors = ButtonDefaults.buttonColors(containerColor = Panel, contentColor = Color.White),
                         shape = RoundedCornerShape(10.dp),
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("#${a.number}", fontWeight = FontWeight.Bold)
+                            Text("#${a.number} ${a.name}", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                             Text("k${a.channels} · ${"%.1f".format(a.seconds)}s", fontSize = 11.sp, color = Color.Gray)
                         }
                     }
@@ -227,7 +251,7 @@ private fun ChannelTab(ble: LooiBle) {
     Column {
         Text(
             "Drži jedan kanal na vrijednosti neko vrijeme. Tako otkrivamo što je koji kanal " +
-                "(pretpostavka: 1 = glava, 2 = okret, 3 = vožnja naprijed?).",
+                "(1 = vožnja, 2 = okret, 3 = položaj glave 0–100).",
             fontSize = 12.sp, color = Color.Gray,
         )
         Spacer(Modifier.height(6.dp))

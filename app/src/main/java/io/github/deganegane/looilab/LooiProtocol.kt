@@ -58,8 +58,9 @@ object LooiProtocol {
 
     /**
      * A script is a list of keyframes (tick, value, channel); one tick ≈ 40 ms, value is a signed
-     * byte, tick 0xFF ends that channel. Seen channels: 1 (guess: head tilt), 2 (guess: turn),
-     * 3 (guess: forward / speed). Sent as fragments: [fragment index, script id, up to 18 bytes].
+     * byte, tick 0xFF ends that channel. Channels (confirmed by replaying the animations):
+     * 1 = drive (+ forward, - back), 2 = rotation (+ left, - right),
+     * 3 = head position, absolute (about 0 = up, 100 = down, 50 = middle). Sent as fragments: [fragment index, script id, up to 18 bytes].
      */
     fun scriptFragments(id: Int, keyframes: ByteArray): List<ByteArray> =
         keyframes.toList().chunked(18).mapIndexed { i, chunk ->
@@ -115,10 +116,20 @@ data class CapturedAnim(
     val keyframesHex: String,
 ) {
     val keyframes: ByteArray get() = keyframesHex.parseHex()!!
+    val name: String get() = CapturedAnims.names.getOrNull(number - 1) ?: "?"
     val seconds: Double get() = ticks * 0.04
 }
 
 object CapturedAnims {
+    /** What each one does, as seen on the robot (2026-11-10). */
+    val names = listOf(
+        "naprijed-nazad", "klimanje", "natrag", "lijevo", "desno", "glava gore", "glava dolje",
+        "naprijed, glava", "lagano natrag", "malo iza", "gore, lijevo-desno", "lijevo, kimne, natrag",
+        "glava gore", "glava gore-dolje, naprijed-nazad", "naprijed", "gore desno, lijevo dolje",
+        "lijevo-desno-lijevo", "naprijed, gore-dolje, natrag", "naprijed-nazad ×2", "naprijed",
+        "gore, kimne", "gore, kimne", "dolje, lijevo-desno, gore",
+    )
+
     val all = listOf(
         CapturedAnim(1, "1", 90, 17, "0002011f0d014bef015500015a0001ff0001"),
         CapturedAnim(2, "3", 35, 2, "034603093c03103c03144603194603233c03ff0003"),
