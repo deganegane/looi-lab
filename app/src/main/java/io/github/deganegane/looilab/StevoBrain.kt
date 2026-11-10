@@ -44,8 +44,11 @@ class StevoBrain(
     private val face: FaceState,
     private val ble: LooiBle,
     private val eyes: CameraEyes,
+    private val memory: Memory,
     /** Takes a photo; the callback gets the file name or null. */
     private val takePhoto: ((String?) -> Unit) -> Unit,
+    /** The conversation ended because nobody spoke: time to sleep. */
+    private val onIdle: () -> Unit = {},
 ) {
     companion object {
         const val MODEL = "models/gemini-3.8-live"
@@ -84,13 +87,15 @@ class StevoBrain(
             "You cannot see right now, but you have a camera: when the person asks for a photo, " +
                 "take it with take_photo."
 
-        fun persona(name: String, language: String, vision: Boolean) = """
+        const val DEFAULT_PERSONALITY = "Playful, curious, warm, a bit cheeky and with dry humour, " +
+            "never mean. You get excited about small things and you are proud of being a robot."
+
+        fun persona(name: String, personality: String, language: String, vision: Boolean, memory: String) = """
             You are $name, a small desk robot. Your body is a little wheeled base that can drive,
             turn and tilt your head; your face is the phone screen on top of it, two glowing
             orange Nixie-tube eyes. You live on your owner's desk and you talk with them by voice.
 
-            Personality: playful, curious, warm, a bit cheeky and with dry humour, never mean.
-            You get excited about small things and you are proud of being a robot.
+            Personality: ${personality.ifBlank { DEFAULT_PERSONALITY }}
 
             ${languageRule(language)}
 
@@ -104,7 +109,7 @@ class StevoBrain(
             shake your head, look up or down, turn, wiggle or dance. Do it while you speak,
             e.g. nod when you agree, look up when you think, dance when something is great.
             Never say the tool names out loud and never describe that you are calling them.
-        """.trimIndent()
+        """.trimIndent() + "\n\n" + memory
     }
 
     private val _state = MutableStateFlow(TalkState.OFF)
@@ -121,6 +126,10 @@ class StevoBrain(
     var name: String
         get() = prefs.getString("name", "Stevo")?.takeIf { it.isNotBlank() } ?: "Stevo"
         set(v) = prefs.edit().putString("name", v.trim()).apply()
+    /** Free text: how Stevo behaves and talks (style, tone, quirks). */
+    var personality: String
+        get() = prefs.getString("personality", DEFAULT_PERSONALITY) ?: DEFAULT_PERSONALITY
+        set(v) = prefs.edit().putString("personality", v).apply()
     var vision: Boolean
         get() = prefs.getBoolean("vision", false)
         set(v) = prefs.edit().putBoolean("vision", v).apply()
@@ -130,6 +139,10 @@ class StevoBrain(
     var mirror: Boolean
         get() = prefs.getBoolean("mirror", false)
         set(v) = prefs.edit().putBoolean("mirror", v).apply()
+    /** Whether the base may charge the phone (experimental, FED2). */
+    var phoneCharging: Boolean
+        get() = prefs.getBoolean("charging", true)
+        set(v) = prefs.edit().putBoolean("charging", v).apply()
     var keepScreenOn: Boolean
         get() = prefs.getBoolean("screen", true)
         set(v) = prefs.edit().putBoolean("screen", v).apply()
@@ -172,7 +185,11 @@ class StevoBrain(
     private var pendingStevo = StringBuilder()
     private var baseBefore = Expr.NEUTRAL
 
-    private fun line(s: String) = _transcript.update { (it + s).takeLast(30) }
+    private val session = mutableListOf<String>()
+    private fun line(s: String) {
+        synchronized(session) { session += s }
+        _transcript.update { (it + s).takeLast(30) }
+    }
 
     fun toggle() { if (_state.value == TalkState.OFF) start() else stop("") }
 
@@ -200,6 +217,8 @@ class StevoBrain(
         audioMode(false)
         flushTranscript()
         if (reason.isNotEmpty()) line(reason)
+        val lines = synchronized(session) { session.toList().also { session.clear() } }
+        runCatching { memory.endConversation(lines, language) }
         face.talk = 0f
         face.set(baseBefore)
         _state.value = TalkState.OFF
@@ -233,14 +252,28 @@ class StevoBrain(
             .put("parameters", JSONObject().put("type", "OBJECT")
                 .put("properties", JSONObject().put("reason", JSONObject().put("type", "STRING")
                     .put("description", "Why: what is in the photo, in a few words"))))
+        fun textTool(name: String, desc: String, param: String, pdesc: String) = JSONObject()
+            .put("name", name).put("description", desc)
+            .put("parameters", JSONObject().put("type", "OBJECT")
+                .put("properties", JSONObject().put(param, JSONObject().put("type", "STRING").put("description", pdesc)))
+                .put("required", JSONArray(listOf(param))))
+        val tools = JSONArray().put(expr).put(move).put(photo)
+        if (memory.level >= 1) {
+            tools.put(textTool("remember", "Save something worth remembering about the person, for future conversations.",
+                "fact", "One short sentence, e.g. 'Has a cat called Mici.'"))
+            tools.put(textTool("forget", "Delete saved notes about something, when the person asks you to forget it.",
+                "about", "What to forget, in a few words"))
+        }
+        if (memory.level >= 3) tools.put(textTool("recall", "Search all earlier conversations for something.",
+            "query", "Key words to look for"))
         val setup = JSONObject()
             .put("model", MODEL)
             .put("generationConfig", JSONObject()
                 .put("responseModalities", JSONArray(listOf("AUDIO")))
                 .put("speechConfig", JSONObject().put("voiceConfig", JSONObject()
                     .put("prebuiltVoiceConfig", JSONObject().put("voiceName", voice)))))
-            .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", persona(name, language, vision)))))
-            .put("tools", JSONArray().put(JSONObject().put("functionDeclarations", JSONArray().put(expr).put(move).put(photo))))
+            .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", persona(name, personality, language, vision, memory.promptSection())))))
+            .put("tools", JSONArray().put(JSONObject().put("functionDeclarations", tools)))
             .put("inputAudioTranscription", JSONObject())
             .put("outputAudioTranscription", JSONObject())
         return JSONObject().put("setup", setup).toString()
@@ -341,6 +374,9 @@ class StevoBrain(
                     }
                     "photo taken"
                 }
+                "remember" -> memory.remember(args.optString("fact")).also { if (it == "saved") line("🧠 ${args.optString("fact")}") }
+                "forget" -> memory.forget(args.optString("about"))
+                "recall" -> memory.recall(args.optString("query"))
                 else -> "unknown tool"
             }
             responses.put(JSONObject().put("id", call.optString("id")).put("name", name)
@@ -422,6 +458,7 @@ class StevoBrain(
                     ws?.send("""{"realtimeInput":{"audio":{"mimeType":"audio/pcm;rate=$IN_RATE","data":"$b64"}}}""")
                     if (!stevoTalking && now - lastActivity > IDLE_MS) {
                         stop("· $name je zaspao (tišina). Dodirni lice za novi razgovor.")
+                        onIdle()
                         break
                     }
                 }

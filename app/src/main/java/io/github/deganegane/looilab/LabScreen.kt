@@ -71,7 +71,7 @@ fun LabScreen(ble: LooiBle, face: FaceState, brain: StevoBrain, eyes: CameraEyes
     MaterialTheme(colorScheme = darkColorScheme(primary = Accent, background = Color(0xFF0E1116), surface = Panel)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.safeDrawingPadding().padding(12.dp)) {
-                Header(ble, onConnect)
+                Header(ble, onConnect, onBack = onFullscreen)
                 Spacer(Modifier.height(8.dp))
                 var tab by remember { mutableIntStateOf(0) }
                 ScrollableTabRow(selectedTabIndex = tab, containerColor = Color.Transparent, edgePadding = 0.dp) {
@@ -98,7 +98,7 @@ fun LabScreen(ble: LooiBle, face: FaceState, brain: StevoBrain, eyes: CameraEyes
 }
 
 @Composable
-private fun Header(ble: LooiBle, onConnect: () -> Unit) {
+private fun Header(ble: LooiBle, onConnect: () -> Unit, onBack: () -> Unit) {
     val state by ble.state.collectAsState()
     Row(verticalAlignment = Alignment.CenterVertically) {
         val (label, color) = when (state) {
@@ -108,10 +108,12 @@ private fun Header(ble: LooiBle, onConnect: () -> Unit) {
             ConnState.READY -> (ble.deviceName ?: "LOOI") + " ✓" to Color(0xFF7BE07B)
             ConnState.DISCONNECTED -> "odspojen" to Color(0xFFFF6B6B)
         }
+        OutlinedButton(onClick = onBack, contentPadding = ButtonDefaults.TextButtonContentPadding) { Text("←") }
+        Spacer(Modifier.width(8.dp))
         Box(Modifier.size(10.dp).background(color, CircleShape))
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
-            Text("LOOI Lab", fontWeight = FontWeight.Bold, fontSize = 20.sp)
+            Text("Dijagnostika", fontWeight = FontWeight.Bold, fontSize = 20.sp)
             Text(label, color = color, fontSize = 13.sp)
         }
         if (state == ConnState.READY) {

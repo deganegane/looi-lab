@@ -287,6 +287,7 @@ class LooiBle(private val context: Context) {
         _state.value = ConnState.READY
         note("··", "spreman ✓")
         playScript(LooiProtocol.headTo(LooiProtocol.HEAD_MIDDLE, 12), "glava u sredinu", gesture = false)
+        onReady?.invoke(this)
         keepAlive = scope.launch {
             while (isActive) {
                 delay(30_000)
@@ -298,6 +299,15 @@ class LooiBle(private val context: Context) {
     // ---------------------------------------------------------------- robot actions
 
     private var scriptId = 0x40
+
+    /**
+     * Phone charging from the base. Guess: FED2, which the official app wrote 00 now and then;
+     * 01 = on, 00 = off. To be confirmed on the robot.
+     */
+    suspend fun setCharging(on: Boolean) = write(LooiProtocol.FED2, byteArrayOf(if (on) 1 else 0))
+
+    /** Runs once the handshake is done (e.g. settings that live on the base). */
+    var onReady: (suspend LooiBle.() -> Unit)? = null
 
     /** [rotate]: + = left; [tilt]: + = head down. */
     suspend fun move(rotate: Int, tilt: Int) {
