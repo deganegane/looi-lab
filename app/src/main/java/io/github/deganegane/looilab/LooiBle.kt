@@ -19,7 +19,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -56,6 +58,10 @@ class LooiBle(private val context: Context) {
     /** Latest decoded reading per event type, for the live sensor panel. */
     private val _sensors = MutableStateFlow<Map<String, String>>(emptyMap())
     val sensors: StateFlow<Map<String, String>> = _sensors.asStateFlow()
+
+    /** Every FED9 notification, for whoever wants to react (the face). */
+    private val _events = MutableSharedFlow<ByteArray>(extraBufferCapacity = 64)
+    val events: SharedFlow<ByteArray> = _events
 
     var deviceName: String? = null
         private set
@@ -201,6 +207,7 @@ class LooiBle(private val context: Context) {
             val meaning = LooiProtocol.describeEvent(value)
             val key = value.firstOrNull()?.let { "%02x".format(it) } ?: "?"
             _sensors.update { it + (key to "${value.hex()}  →  $meaning") }
+            _events.tryEmit(value)
             note("◀", nameOf(uuid), value, meaning)
         } else if (uuid == LooiProtocol.CLOCK) {
             note("◀", nameOf(uuid), value, "\"" + value.toString(Charsets.US_ASCII) + "\"")

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -47,6 +48,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -63,7 +65,7 @@ private val Accent = Color(0xFF5CE1E6)
 private val Panel = Color(0xFF1B2230)
 
 @Composable
-fun LabScreen(ble: LooiBle, onConnect: () -> Unit) {
+fun LabScreen(ble: LooiBle, face: FaceState, onConnect: () -> Unit, onFullscreen: () -> Unit) {
     MaterialTheme(colorScheme = darkColorScheme(primary = Accent, background = Color(0xFF0E1116), surface = Panel)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.safeDrawingPadding().padding(12.dp)) {
@@ -71,16 +73,17 @@ fun LabScreen(ble: LooiBle, onConnect: () -> Unit) {
                 Spacer(Modifier.height(8.dp))
                 var tab by remember { mutableIntStateOf(0) }
                 TabRow(selectedTabIndex = tab, containerColor = Color.Transparent) {
-                    listOf("Pokret", "Animacije", "Kanali", "Sirovo").forEachIndexed { i, t ->
-                        Tab(selected = tab == i, onClick = { tab = i }, text = { Text(t) })
+                    listOf("Lice", "Pokret", "Animacije", "Kanali", "Sirovo").forEachIndexed { i, t ->
+                        Tab(selected = tab == i, onClick = { tab = i }, text = { Text(t, fontSize = 13.sp, maxLines = 1) })
                     }
                 }
                 Spacer(Modifier.height(8.dp))
                 Box(Modifier.fillMaxWidth().weight(0.55f)) {
                     when (tab) {
-                        0 -> DriveTab(ble)
-                        1 -> AnimTab(ble)
-                        2 -> ChannelTab(ble)
+                        0 -> FaceTab(face, onFullscreen)
+                        1 -> DriveTab(ble, face)
+                        2 -> AnimTab(ble)
+                        3 -> ChannelTab(ble)
                         else -> RawTab(ble)
                     }
                 }
@@ -118,10 +121,35 @@ private fun Header(ble: LooiBle, onConnect: () -> Unit) {
     }
 }
 
+// ------------------------------------------------------------------ face
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun FaceTab(face: FaceState, onFullscreen: () -> Unit) {
+    Column(Modifier.verticalScroll(rememberScrollState())) {
+        Box(
+            Modifier.fillMaxWidth().aspectRatio(2f).clip(RoundedCornerShape(16.dp))
+                .border(6.dp, Color(0xFF2B1D14), RoundedCornerShape(16.dp))
+        ) { NixieFace(face, Modifier.fillMaxSize()) }
+        Spacer(Modifier.height(8.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Expr.entries.forEach { e ->
+                FilterChip(selected = face.base == e, onClick = { face.set(e) }, label = { Text(e.label, fontSize = 12.sp) })
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Button(onClick = onFullscreen) { Text("Cijeli zaslon (stavi mobitel na robota)") }
+        Text(
+            "Na cijelom zaslonu: dodir = sretno + klimanje, dugi dodir = zaljubljeno, natrag = izlaz.",
+            fontSize = 12.sp, color = Color.Gray,
+        )
+    }
+}
+
 // ------------------------------------------------------------------ drive
 
 @Composable
-private fun DriveTab(ble: LooiBle) {
+private fun DriveTab(ble: LooiBle, face: FaceState) {
     var stick by remember { mutableStateOf(Offset.Zero) } // -1..1 each axis
     var active by remember { mutableStateOf(false) }
     var maxSpeed by remember { mutableFloatStateOf(60f) }
@@ -130,6 +158,8 @@ private fun DriveTab(ble: LooiBle) {
     LaunchedEffect(active) {
         if (active) {
             while (true) {
+                // The eyes look where the robot is going.
+                face.lookX = stick.x; face.lookY = stick.y
                 // Stick right = rotate right, stick up = head up.
                 val rotate = (-stick.x * maxSpeed).roundToInt()
                 val tilt = (stick.y * maxSpeed).roundToInt()
@@ -137,6 +167,7 @@ private fun DriveTab(ble: LooiBle) {
                 delay(60)
             }
         } else {
+            face.lookX = 0f; face.lookY = 0f
             repeat(3) { ble.launch { move(0, 0) }; delay(60) }
         }
     }
