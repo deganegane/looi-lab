@@ -6,6 +6,10 @@ import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
@@ -38,7 +42,26 @@ class MainActivity : ComponentActivity() {
     private lateinit var tracking: Tracking
     private lateinit var memory: Memory
     private lateinit var life: Life
+    private lateinit var body: BodyLanguage
     private val face = FaceState()
+
+    /** The phone's ambient light sensor (lux), for the lamp; -1 if the phone has none. */
+    @Volatile private var lux = -1f
+    private val lightListener = object : SensorEventListener {
+        override fun onSensorChanged(e: SensorEvent) { lux = e.values[0] }
+        override fun onAccuracyChanged(s: Sensor?, a: Int) {}
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val sm = getSystemService(SENSOR_SERVICE) as SensorManager
+        sm.getDefaultSensor(Sensor.TYPE_LIGHT)?.let { sm.registerListener(lightListener, it, SensorManager.SENSOR_DELAY_NORMAL) }
+    }
+
+    override fun onPause() {
+        (getSystemService(SENSOR_SERVICE) as SensorManager).unregisterListener(lightListener)
+        super.onPause()
+    }
     private var screen by mutableStateOf(Screen.FACE)
 
     // ------------------------------------------------------------------ permissions
@@ -159,8 +182,11 @@ class MainActivity : ComponentActivity() {
         memory = Memory(applicationContext, apiKey = { brain.apiKey }, log = { ble.note("··", it) })
         brain = StevoBrain(applicationContext, face, ble, eyes, memory,
             takePhoto = { done -> if (eyes.running) eyes.takePhoto(done) else done(null) },
-            onIdle = { life.sleep() })
+            onIdle = { life.sleep() },
+            onExpression = { body.onExpression(it) })
         life = Life(face, ble, eyes, talking = { brain.state.value != TalkState.OFF })
+        body = BodyLanguage(ble, level = { brain.liveliness }, speaking = { brain.state.value == TalkState.SPEAKING }, asleep = { life.sleeping })
+        body.start(lifecycleScope)
         eyes.rotation = displayRotation()
         tracking = Tracking(eyes, face, ble, mirror = { brain.mirror },
             bodyAllowed = { screen == Screen.FACE && !life.sleeping })
@@ -184,16 +210,26 @@ class MainActivity : ComponentActivity() {
             }
         }
         life.start(lifecycleScope)
-        // The lamp in "auto": on when the camera sees darkness for a few seconds, off when bright.
+        // The lamp in "auto": on after a few seconds of darkness, off once the room is lit.
+        // The phone's light sensor measures real light (the camera adjusts its exposure to the
+        // dark, so its picture never looks dark); the camera is only the fallback.
         lifecycleScope.launch {
             var dark = 0; var bright = 0
             while (true) {
                 delay(1_000)
-                if (brain.lightMode != "auto" || !eyes.running || ble.state.value != ConnState.READY) { dark = 0; bright = 0; continue }
-                val b = eyes.brightness
-                if (b < 0) continue
-                if (!ble.lightOn) { dark = if (b < 35) dark + 1 else 0; if (dark >= 3 && !life.sleeping) { dark = 0; ble.launch { setLight(true) } } }
-                else { bright = if (b > 150) bright + 1 else 0; if (bright >= 10 || life.sleeping) { bright = 0; ble.launch { setLight(false) } } }
+                if (brain.lightMode != "auto" || ble.state.value != ConnState.READY) { dark = 0; bright = 0; continue }
+                val l = lux
+                val isDark: Boolean; val isBright: Boolean
+                if (l >= 0) { isDark = l < 6f; isBright = l > 120f } // the lamp itself adds a little light
+                else if (eyes.running && eyes.brightness >= 0) { isDark = eyes.brightness < 35; isBright = eyes.brightness > 150 }
+                else continue
+                if (!ble.lightOn) {
+                    dark = if (isDark) dark + 1 else 0
+                    if (dark >= 3 && !life.sleeping) { dark = 0; ble.launch { setLight(true) } }
+                } else {
+                    bright = if (isBright) bright + 1 else 0
+                    if (bright >= 8 || life.sleeping) { bright = 0; ble.launch { setLight(false) } }
+                }
             }
         }
         // Keep trying to reach the robot while the face is shown.

@@ -154,7 +154,7 @@ private fun Hub(ble: LooiBle, brain: StevoBrain, memory: Memory, scroll: ScrollS
                 .verticalScroll(scroll).padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
             HubGroup(brain.name) {
-                HubRow(Icons.Rounded.Person, "Osobnost", brain.name + " · " + brain.personality.take(60)) { onOpen(Page.CHARACTER) }
+                HubRow(Icons.Rounded.Person, "Osobnost", brain.name + " · " + listOf("miran", "normalan", "živahan")[brain.liveliness.coerceIn(0, 2)] + " · " + brain.personality.take(50)) { onOpen(Page.CHARACTER) }
                 HubRow(Icons.Rounded.Call, "Glas i jezik",
                     listOf(StevoBrain.LANGUAGES[brain.language] ?: "", brain.voice,
                         "%.2f×".format(brain.speed), "visina %.2f×".format(brain.pitch)).joinToString(" · ")) { onOpen(Page.VOICE) }
@@ -170,7 +170,7 @@ private fun Hub(ble: LooiBle, brain: StevoBrain, memory: Memory, scroll: ScrollS
                         if (brain.keepScreenOn) "ekran upaljen" else "ekran se gasi").joinToString(" · ")) { onOpen(Page.CAMERA) }
             }
             HubGroup("Aplikacija") {
-                HubRow(Icons.Rounded.Lock, "Gemini", if (brain.apiKey.isBlank()) "Upiši API ključ" else "Ključ spremljen · ${StevoBrain.MODEL.removePrefix("models/")}") { onOpen(Page.GEMINI) }
+                HubRow(Icons.Rounded.Lock, "Gemini", if (brain.apiKey.isBlank()) "Upiši API ključ" else "Ključ spremljen · " + (if (brain.smart) "razmišlja" else "brzi") + if (brain.search) " · pretraživanje" else "") { onOpen(Page.GEMINI) }
                 HubRow(Icons.Rounded.Info, "Dijagnostika", "Ručna vožnja, animacije, dnevnik Bluetootha") { a.onDiagnostics() }
             }
             Text(
@@ -296,6 +296,18 @@ private fun CharacterPage(brain: StevoBrain) {
         TextButton(onClick = { personality = StevoBrain.DEFAULT_PERSONALITY; brain.personality = personality }) { Text("Vrati zadano") }
     }
     var swearing by remember { mutableStateOf(brain.swearing) }
+    var lively by remember { mutableIntStateOf(brain.liveliness) }
+    AppCard {
+        CardTitle("Koliko se miče")
+        Segments(listOf(0 to "Mirno", 1 to "Normalno", 2 to "Živahno"), lively) { lively = it; brain.liveliness = it }
+        Hint(
+            when (lively) {
+                0 -> "Miče se samo kad sam odluči ili kad ga zamoliš."
+                1 -> "Tijelo prati izraze lica, a dok priča ponekad kimne ili se okrene."
+                else -> "Stalno je u pokretu: prati izraze, kima i vrti se dok priča, pleše kad je oduševljen."
+            }
+        )
+    }
     AppCard {
         SwitchRow("Smije psovati", "Prost i bezobrazan humor kao među prijateljima. Bez uvreda koje stvarno vrijeđaju.", swearing) {
             swearing = it; brain.swearing = it
@@ -485,8 +497,20 @@ private fun GeminiPage(brain: StevoBrain) {
         }
         Hint("Besplatno ga napraviš na aistudio.google.com → Get API key. Ostaje samo na ovom mobitelu.")
     }
+    var smart by remember { mutableStateOf(brain.smart) }
+    var search by remember { mutableStateOf(brain.search) }
+    AppCard {
+        SwitchRow("Pametniji (razmišlja)", "Model koji promisli prije odgovora: bolje razumije i pametnije odgovara, ali malo kasnije počne govoriti.", smart) {
+            smart = it; brain.smart = it
+        }
+        HorizontalDivider()
+        SwitchRow("Google pretraživanje", "Zna aktualne stvari: vrijeme, vijesti, rezultate, radno vrijeme…", search) {
+            search = it; brain.search = it
+        }
+    }
     AppCard {
         CardTitle("Modeli")
-        Hint("Razgovor: ${StevoBrain.MODEL.removePrefix("models/")}\nPamćenje (sažeci): ${Memory.SUMMARY_MODEL}")
+        Hint("Razgovor: ${(if (smart) StevoBrain.MODEL_SMART else StevoBrain.MODEL).removePrefix("models/")}\nPamćenje (sažeci): ${Memory.SUMMARY_MODEL}")
+        Hint("Pretplata Google AI Pro u Gemini aplikaciji ne vrijedi za druge aplikacije; Stevo koristi svoj API ključ.")
     }
 }

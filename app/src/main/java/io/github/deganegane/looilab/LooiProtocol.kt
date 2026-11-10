@@ -75,8 +75,10 @@ object LooiProtocol {
     /** Keyframes from (tick, value, channel) triples; each channel used gets its end marker. */
     fun keys(vararg t: Int): ByteArray {
         val out = ArrayList<Byte>()
-        var i = 0
-        while (i + 2 < t.size) { out += t[i].toByte(); out += t[i + 1].coerceIn(-127, 127).toByte(); out += t[i + 2].toByte(); i += 3 }
+        // Keyframes in time order across channels, as the official app sends them.
+        t.toList().chunked(3).filter { it.size == 3 }.sortedBy { it[0] }.forEach { (tick, v, c) ->
+            out += tick.toByte(); out += v.coerceIn(-127, 127).toByte(); out += c.toByte()
+        }
         t.toList().chunked(3).map { it[2] }.distinct().forEach { c -> out += 0xFF.toByte(); out += 0; out += c.toByte() }
         return out.toByteArray()
     }

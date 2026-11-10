@@ -49,9 +49,13 @@ class StevoBrain(
     private val takePhoto: ((String?) -> Unit) -> Unit,
     /** The conversation ended because nobody spoke: time to sleep. */
     private val onIdle: () -> Unit = {},
+    /** A new expression: the body may follow it (see BodyLanguage). */
+    private val onExpression: (Expr) -> Unit = {},
 ) {
     companion object {
         const val MODEL = "models/gemini-3.8-live"
+        /** Thinks before it answers: smarter, a little slower. */
+        const val MODEL_SMART = "models/gemini-3.8-live-extended-thinking"
         const val IN_RATE = 16_000
         const val OUT_RATE = 24_000
         private const val URL =
@@ -113,7 +117,8 @@ class StevoBrain(
             Talk like a friend, not like an assistant: short, spoken sentences, usually one to
             three. No lists, no markdown, no emojis. Ask a question back now and then.
 
-            Your body is part of how you talk. Use the tools often and naturally:
+            Your body is part of how you talk, and you are a lively little robot: move a lot,
+            in almost every reply, the way an excited puppy would. Use the tools often:
             set_expression to show what you feel, and change it as the conversation changes:
             happy or laugh at jokes, wink when you tease, thinking while you consider something,
             sad or worried at bad news, excited at great news, confused when you do not get it,
@@ -158,6 +163,19 @@ class StevoBrain(
     var lightMode: String
         get() = prefs.getString("light", "auto") ?: "auto"
         set(v) = prefs.edit().putString("light", v).apply()
+    /** The thinking model: better answers, a bit more delay. */
+    var smart: Boolean
+        get() = prefs.getBoolean("smart", false)
+        set(v) = prefs.edit().putBoolean("smart", v).apply()
+    /** Google Search during conversations (weather, news, anything current). */
+    var search: Boolean
+        get() = prefs.getBoolean("search", true)
+        set(v) = prefs.edit().putBoolean("search", v).apply()
+    /** How much he moves on his own: 0 calm, 1 normal, 2 lively. */
+    var liveliness: Int
+        get() = prefs.getInt("lively", 2)
+        set(v) = prefs.edit().putInt("lively", v).apply()
+
     /** He may swear and be crude when it fits (only if the owner wants that). */
     var swearing: Boolean
         get() = prefs.getBoolean("swearing", false)
@@ -298,16 +316,21 @@ class StevoBrain(
         }
         if (memory.level >= 3) tools.put(textTool("recall", "Search all earlier conversations for something.",
             "query", "Key words to look for"))
+        val toolList = JSONArray().put(JSONObject().put("functionDeclarations", tools))
+        if (search) toolList.put(JSONObject().put("googleSearch", JSONObject()))
         val setup = JSONObject()
-            .put("model", MODEL)
+            .put("model", if (smart) MODEL_SMART else MODEL)
             .put("generationConfig", JSONObject()
                 .put("responseModalities", JSONArray(listOf("AUDIO")))
                 .put("speechConfig", JSONObject().put("voiceConfig", JSONObject()
                     .put("prebuiltVoiceConfig", JSONObject().put("voiceName", voice)))))
             .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", persona(name, personality, language, vision, swearing, memory.promptSection())))))
-            .put("tools", JSONArray().put(JSONObject().put("functionDeclarations", tools)))
+            .put("tools", toolList)
             .put("inputAudioTranscription", JSONObject())
             .put("outputAudioTranscription", JSONObject())
+            .put("realtimeInputConfig", JSONObject().put("automaticActivityDetection", JSONObject()
+                .put("endOfSpeechSensitivity", "END_SENSITIVITY_LOW")
+                .put("silenceDurationMs", 900)))
             .put("sessionResumption", JSONObject().apply { resumeHandle?.let { put("handle", it) } })
             .put("contextWindowCompression", JSONObject().put("slidingWindow", JSONObject()))
         return JSONObject().put("setup", setup).toString()
@@ -421,7 +444,7 @@ class StevoBrain(
             val result = when (name) {
                 "set_expression" -> {
                     val e = Expr.entries.firstOrNull { it.name.equals(args.optString("expression"), true) }
-                    if (e != null) { face.set(e); "ok" } else "unknown expression"
+                    if (e != null) { face.set(e); onExpression(e); "ok" } else "unknown expression"
                 }
                 "move" -> {
                     val g = Gestures.all[args.optString("action")]
@@ -509,10 +532,15 @@ class StevoBrain(
 
         recordThread = Thread {
             val inMin = AudioRecord.getMinBufferSize(IN_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-            val rec = AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, IN_RATE,
+            // Half duplex needs no echo canceller, and the recognition source keeps the voice cleaner
+            // (communication processing smears consonants, which hurts Croatian a lot).
+            val source = if (allowInterrupt) MediaRecorder.AudioSource.VOICE_COMMUNICATION else MediaRecorder.AudioSource.VOICE_RECOGNITION
+            val rec = AudioRecord(source, IN_RATE,
                 AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(inMin, 6400) * 2)
-            if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(rec.audioSessionId)?.enabled = true
-            if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(rec.audioSessionId)?.enabled = true
+            if (allowInterrupt) {
+                if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(rec.audioSessionId)?.enabled = true
+                if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(rec.audioSessionId)?.enabled = true
+            }
             rec.startRecording()
             val buf = ByteArray(3200) // 100 ms
             try {
