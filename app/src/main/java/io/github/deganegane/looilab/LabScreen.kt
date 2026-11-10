@@ -134,6 +134,7 @@ private fun StevoTab(brain: StevoBrain, onTalk: () -> Unit, onFullscreen: () -> 
     var key by remember { mutableStateOf(brain.apiKey) }
     var name by remember { mutableStateOf(brain.name) }
     var voice by remember { mutableStateOf(brain.voice) }
+    var lang by remember { mutableStateOf(brain.language) }
     var interrupt by remember { mutableStateOf(brain.allowInterrupt) }
     LazyColumn {
         item {
@@ -171,6 +172,12 @@ private fun StevoTab(brain: StevoBrain, onTalk: () -> Unit, onFullscreen: () -> 
                 value = name, onValueChange = { name = it; brain.name = it }, singleLine = true,
                 label = { Text("Ime robota") }, modifier = Modifier.fillMaxWidth(),
             )
+            Text("Jezik razgovora", fontSize = 12.sp, color = Color.Gray)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                StevoBrain.LANGUAGES.forEach { (code, label) ->
+                    FilterChip(selected = lang == code, onClick = { lang = code; brain.language = code }, label = { Text(label, fontSize = 12.sp) })
+                }
+            }
             Text("Glas", fontSize = 12.sp, color = Color.Gray)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 StevoBrain.VOICES.forEach { v ->

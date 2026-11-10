@@ -53,9 +53,26 @@ class StevoBrain(
         /** No speech either way for this long: the session closes (it costs money while open). */
         const val IDLE_MS = 25_000L
 
+        /** Conversation language: a fixed one (default) or "auto". */
+        val LANGUAGES = linkedMapOf("hr" to "Hrvatski", "en" to "English", "de" to "Deutsch", "auto" to "Automatski")
+
+        private fun languageRule(code: String): String = when (code) {
+            "auto" -> "Language: answer in the language the person speaks to you. Only switch " +
+                "language when they clearly switch for a whole sentence, never because of a single " +
+                "foreign word or an accent. When unsure, stay in the language you used last."
+            else -> {
+                val lang = mapOf("hr" to "Croatian", "en" to "English", "de" to "German")[code] ?: "Croatian"
+                "Language: ALWAYS speak $lang, in every reply, even if you think you heard another " +
+                    "language. The person speaks $lang with a regional accent; similar languages " +
+                    "(Serbian, Bosnian, Slovenian, Russian, Polish, Czech) are mishearings of $lang, " +
+                    "never answer in them. Switch to another language only when the person explicitly " +
+                    "asks you to (e.g. 'let us speak English'), and stay in it until asked to switch back."
+            }
+        }
+
         val VOICES = listOf("Puck", "Charon", "Fenrir", "Orus", "Kore", "Aoede")
 
-        fun persona(name: String) = """
+        fun persona(name: String, language: String) = """
             You are $name, a small desk robot. Your body is a little wheeled base that can drive,
             turn and tilt your head; your face is the phone screen on top of it, two glowing
             orange Nixie-tube eyes. You live on your owner's desk and you talk with them by voice.
@@ -63,8 +80,7 @@ class StevoBrain(
             Personality: playful, curious, warm, a bit cheeky and with dry humour, never mean.
             You get excited about small things and you are proud of being a robot.
 
-            Language: always answer in the language the person just spoke (Croatian, English,
-            German or any other). If they switch language, switch with them.
+            ${languageRule(language)}
 
             Talk like a friend, not like an assistant: short, spoken sentences, usually one to
             three. No lists, no markdown, no emojis. Ask a question back now and then.
@@ -91,6 +107,9 @@ class StevoBrain(
     var name: String
         get() = prefs.getString("name", "Stevo")?.takeIf { it.isNotBlank() } ?: "Stevo"
         set(v) = prefs.edit().putString("name", v.trim()).apply()
+    var language: String
+        get() = prefs.getString("lang", "hr") ?: "hr"
+        set(v) = prefs.edit().putString("lang", v).apply()
     var voice: String
         get() = prefs.getString("voice", "Puck") ?: "Puck"
         set(v) = prefs.edit().putString("voice", v).apply()
@@ -172,7 +191,7 @@ class StevoBrain(
                 .put("responseModalities", JSONArray(listOf("AUDIO")))
                 .put("speechConfig", JSONObject().put("voiceConfig", JSONObject()
                     .put("prebuiltVoiceConfig", JSONObject().put("voiceName", voice)))))
-            .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", persona(name)))))
+            .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", persona(name, language)))))
             .put("tools", JSONArray().put(JSONObject().put("functionDeclarations", JSONArray().put(expr).put(move))))
             .put("inputAudioTranscription", JSONObject())
             .put("outputAudioTranscription", JSONObject())
