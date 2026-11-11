@@ -241,9 +241,30 @@ class StevoBrain(
 
     fun toggle() { if (_state.value == TalkState.OFF) start() else stop("") }
 
+    /** "gemini", "local" (the model on the phone) or "auto" (Gemini, the phone when it fails). */
+    var brainMode: String
+        get() = prefs.getString("brain", "auto") ?: "auto"
+        set(v) = prefs.edit().putString("brain", v).apply()
+
+    /** Gemini could not be reached (quota, no internet, bad key) before anything was said. */
+    var onFailed: (() -> Unit)? = null
+    @Volatile private var heardUser = false
+
+    // ---- The on-device brain runs its own conversation but keeps the books here, so the
+    // ---- face, the body and the memory see one conversation whoever is thinking.
+    fun beginExternal() {
+        baseBefore = face.base
+        face.set(Expr.CURIOUS)
+        heardUser = true
+        _state.value = TalkState.CONNECTING
+    }
+    fun publish(s: TalkState) { _state.value = s }
+    fun log(s: String) = line(s)
+
     fun start() {
         if (_state.value != TalkState.OFF) return
-        if (apiKey.isBlank()) { line("⚠ upiši Gemini API ključ u kartici Stevo"); return }
+        if (apiKey.isBlank()) { line("⚠ Upiši Gemini API ključ u Postavkama."); onFailed?.invoke(); return }
+        heardUser = false
         _state.value = TalkState.CONNECTING
         baseBefore = face.base
         face.set(Expr.CURIOUS)
@@ -265,12 +286,14 @@ class StevoBrain(
         runCatching { track?.pause(); track?.flush(); track?.release() }; track = null
         audioMode(false)
         flushTranscript()
-        if (reason.isNotEmpty()) line(reason)
+        val failed = reason.startsWith("⚠") && !heardUser
+        if (reason.isNotEmpty()) line(if ("quota" in reason) "⚠ Potrošena je Gemini kvota. Probaj kasnije." else reason)
         val lines = synchronized(session) { session.toList().also { session.clear() } }
         runCatching { memory.endConversation(lines, language) }
         face.talk = 0f; face.mic = 0f
         face.set(baseBefore)
         _state.value = TalkState.OFF
+        if (failed) { face.flash(Expr.SAD); onFailed?.invoke() }
     }
 
     // ------------------------------------------------------------------ setup message
@@ -411,7 +434,7 @@ class StevoBrain(
 
     private fun serverContent(c: JSONObject) {
         c.optJSONObject("inputTranscription")?.optString("text")?.let {
-            if (it.isNotEmpty()) { pendingUser.append(it); lastActivity = System.currentTimeMillis() }
+            if (it.isNotEmpty()) { pendingUser.append(it); heardUser = true; lastActivity = System.currentTimeMillis() }
         }
         c.optJSONObject("outputTranscription")?.optString("text")?.let {
             if (it.isNotEmpty()) pendingStevo.append(it)
@@ -452,14 +475,7 @@ class StevoBrain(
                     val e = Expr.entries.firstOrNull { it.name.equals(args.optString("expression"), true) }
                     if (e != null) { face.set(e); onExpression(e); "ok" } else "unknown expression"
                 }
-                "move" -> {
-                    val g = Gestures.all[args.optString("action")]
-                    if (g == null) "unknown action"
-                    else if (ble.state.value != ConnState.READY) "the robot base is not connected, only the face can move"
-                    else if (args.optString("action") in setOf("forward", "back", "dance") && ble.atEdge)
-                        "refused: you are standing at the edge of the table, the floor sensors see the drop. Tell the person you would fall off."
-                    else { ble.launch { g(this) }; "ok" }
-                }
+                "move" -> Gestures.perform(ble, args.optString("action"))
                 "take_photo" -> {
                     face.flash(Expr.SURPRISED)
                     takePhoto { file ->
@@ -590,6 +606,16 @@ class StevoBrain(
 
 /** Body language Gemini can ask for, built from the animations the official app used. */
 object Gestures {
+    /** Does the gesture if it is safe; the answer tells the model what happened. */
+    fun perform(ble: LooiBle, action: String): String {
+        val g = all[action]
+        return if (g == null) "unknown action"
+        else if (ble.state.value != ConnState.READY) "the robot base is not connected, only the face can move"
+        else if (action in setOf("forward", "back", "dance") && ble.atEdge)
+            "refused: you are standing at the edge of the table, the floor sensors see the drop. Tell the person you would fall off."
+        else { ble.launch { g(this) }; "ok" }
+    }
+
     private fun move(label: String, k: (LooiBle) -> ByteArray): suspend (LooiBle) -> Unit = { it.playScript(k(it), "Stevo: $label") }
     private fun anim(n: Int): suspend (LooiBle) -> Unit = { it.playScript(CapturedAnims.all[n - 1].keyframes, "Stevo: animacija $n") }
     val all: Map<String, suspend (LooiBle) -> Unit> = linkedMapOf(

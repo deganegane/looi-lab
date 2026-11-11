@@ -44,6 +44,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var life: Life
     private lateinit var body: BodyLanguage
     private lateinit var autonomy: Autonomy
+    private lateinit var local: LocalBrain
     private lateinit var reactions: Reactions
     private val face = FaceState()
 
@@ -87,11 +88,14 @@ class MainActivity : ComponentActivity() {
         if (ok) applySettings() else ble.note("!!", "bez kamere nema praćenja lica ni slikanja")
     }
     private val askMic = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
-        if (ok) brain.start() else ble.note("!!", "bez mikrofona Stevo ne čuje")
+        if (ok) startBrain() else ble.note("!!", "bez mikrofona Stevo ne čuje")
     }
 
     private val exportMemory = registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) contentResolver.openOutputStream(uri)?.use { it.write(memory.export().toByteArray()) }
+    }
+    private val importModel = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) local.importModel(uri)
     }
     private val importMemory = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -107,9 +111,17 @@ class MainActivity : ComponentActivity() {
     /** Tap on the face: wake up and talk, or end the conversation. */
     private fun talk() {
         life.wake(); autonomy.excite()
-        if (brain.state.value != TalkState.OFF) brain.stop("· razgovor prekinut")
-        else if (granted(Manifest.permission.RECORD_AUDIO)) brain.start()
+        if (brain.state.value != TalkState.OFF) { if (local.running) local.stop("· razgovor prekinut") else brain.stop("· razgovor prekinut") }
+        else if (granted(Manifest.permission.RECORD_AUDIO)) startBrain()
         else askMic.launch(Manifest.permission.RECORD_AUDIO)
+    }
+
+    /** Gemini, the model on the phone, or Gemini with the phone as the fallback. */
+    private fun startBrain() {
+        when (brain.brainMode) {
+            "local" -> if (local.modelReady) local.start() else face.say("Preuzmi model: Postavke → Mozak")
+            else -> brain.start()
+        }
     }
 
     private fun photo() {
@@ -186,6 +198,17 @@ class MainActivity : ComponentActivity() {
             takePhoto = { done -> if (eyes.running) eyes.takePhoto(done) else done(null) },
             onIdle = { life.sleep() },
             onExpression = { body.onExpression(it) })
+        local = LocalBrain(applicationContext, brain, face, ble, memory,
+            takePhoto = { done -> if (eyes.running) eyes.takePhoto(done) else done(null) },
+            onIdle = { life.sleep() },
+            onExpression = { body.onExpression(it) })
+        // Gemini out of quota, offline or without a key: the phone's own model takes over.
+        brain.onFailed = {
+            if (brain.brainMode == "auto" && local.modelReady) runOnUiThread {
+                face.say("Gemini nije dostupan, razmišljam sam")
+                local.start()
+            }
+        }
         life = Life(face, ble, eyes, talking = { brain.state.value != TalkState.OFF }, onWake = { autonomy.excite() })
         reactions = Reactions(face) { block -> lifecycleScope.launch { block() } }
         autonomy = Autonomy(ble, face, eyes, mode = { brain.autonomy },
@@ -275,7 +298,8 @@ class MainActivity : ComponentActivity() {
                             onConnect = { connect() },
                             onTrick = { life.wake(); lifecycleScope.launch { autonomy.trick() } },
                         )
-                        Screen.SETTINGS -> SettingsScreen(ble, brain, memory, SettingsActions(
+                        Screen.SETTINGS -> SettingsScreen(ble, brain, memory, local, SettingsActions(
+                            onImportModel = { importModel.launch(arrayOf("*/*")) },
                             onBack = { showScreen(Screen.FACE) },
                             onConnect = { connect() },
                             onApply = {
@@ -303,7 +327,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        if (isFinishing) { brain.stop(""); tracking.stop(); eyes.stop(); ble.disconnect() }
+        if (isFinishing) { local.stop(""); local.release(); brain.stop(""); tracking.stop(); eyes.stop(); ble.disconnect() }
         super.onDestroy()
     }
 }

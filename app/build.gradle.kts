@@ -14,8 +14,10 @@ android {
         applicationId = "io.github.deganegane.looilab"
         minSdk = 26
         targetSdk = 36
-        versionCode = 15
-        versionName = "0.15"
+        versionCode = 16
+        versionName = "0.16"
+        // Phones only (Pixel etc.): keeps the APK small now that it carries an LLM runtime.
+        ndk { abiFilters += "arm64-v8a" }
     }
 
     // One permanent key, so every new APK installs over the previous one.
@@ -68,6 +70,8 @@ dependencies {
     implementation("androidx.camera:camera-camera2:$camerax")
     implementation("androidx.camera:camera-lifecycle:$camerax")
     implementation("com.google.mlkit:face-detection:16.1.7")
+    // The brain on the phone: Gemma through LiteRT-LM (GPU, falls back to CPU).
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.18.0")
 
     testImplementation("junit:junit:4.13.2")
 }

@@ -49,6 +49,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -89,7 +90,7 @@ import java.util.Locale
  */
 private enum class Page(val title: String) {
     CHARACTER("Osobnost"), VOICE("Glas i jezik"), MEMORY("Pamćenje"),
-    ROBOT("Robot"), CAMERA("Kamera i zaslon"), GEMINI("Gemini"),
+    ROBOT("Robot"), CAMERA("Kamera i zaslon"), GEMINI("Mozak"),
 }
 
 class SettingsActions(
@@ -101,10 +102,11 @@ class SettingsActions(
     val onLight: (String) -> Unit,
     val onExport: () -> Unit,
     val onImport: () -> Unit,
+    val onImportModel: () -> Unit,
 )
 
 @Composable
-fun SettingsScreen(ble: LooiBle, brain: StevoBrain, memory: Memory, a: SettingsActions) {
+fun SettingsScreen(ble: LooiBle, brain: StevoBrain, memory: Memory, local: LocalBrain, a: SettingsActions) {
     var page by rememberSaveable { mutableStateOf<Page?>(null) }
     BackHandler { if (page != null) page = null else a.onBack() }
     val hubScroll = rememberScrollState()
@@ -117,7 +119,7 @@ fun SettingsScreen(ble: LooiBle, brain: StevoBrain, memory: Memory, a: SettingsA
         },
         label = "settingsPage",
     ) { p ->
-        if (p == null) Hub(ble, brain, memory, hubScroll, a, onOpen = { page = it })
+        if (p == null) Hub(ble, brain, memory, local, hubScroll, a, onOpen = { page = it })
         else SettingsPage(p.title, onBack = { page = null }) {
             when (p) {
                 Page.CHARACTER -> CharacterPage(brain)
@@ -125,7 +127,7 @@ fun SettingsScreen(ble: LooiBle, brain: StevoBrain, memory: Memory, a: SettingsA
                 Page.MEMORY -> MemoryPage(memory, a)
                 Page.ROBOT -> RobotPage(ble, brain, a)
                 Page.CAMERA -> CameraPage(brain, a)
-                Page.GEMINI -> GeminiPage(brain)
+                Page.GEMINI -> GeminiPage(brain, local, a)
             }
         }
     }
@@ -144,7 +146,7 @@ private fun TopBar(title: String, onBack: () -> Unit) {
 }
 
 @Composable
-private fun Hub(ble: LooiBle, brain: StevoBrain, memory: Memory, scroll: ScrollState, a: SettingsActions, onOpen: (Page) -> Unit) {
+private fun Hub(ble: LooiBle, brain: StevoBrain, memory: Memory, local: LocalBrain, scroll: ScrollState, a: SettingsActions, onOpen: (Page) -> Unit) {
     val robot by ble.state.collectAsState()
     val notes by memory.notes.collectAsState()
     Scaffold(topBar = { TopBar("Postavke", a.onBack) }) { padding ->
@@ -170,7 +172,10 @@ private fun Hub(ble: LooiBle, brain: StevoBrain, memory: Memory, scroll: ScrollS
                         if (brain.keepScreenOn) "ekran upaljen" else "ekran se gasi").joinToString(" · ")) { onOpen(Page.CAMERA) }
             }
             HubGroup("Aplikacija") {
-                HubRow(Icons.Rounded.Lock, "Gemini", if (brain.apiKey.isBlank()) "Upiši API ključ" else "Ključ spremljen · " + (if (brain.smart) "razmišlja" else "brzi") + if (brain.search) " · pretraživanje" else "") { onOpen(Page.GEMINI) }
+                HubRow(Icons.Rounded.Lock, "Mozak",
+                    (BRAIN_MODES.firstOrNull { it.first == brain.brainMode }?.second ?: "") +
+                        (if (brain.apiKey.isBlank()) " · nema Gemini ključa" else "") +
+                        if (local.modelReady) " · model na mobitelu spreman" else " · model nije preuzet") { onOpen(Page.GEMINI) }
                 HubRow(Icons.Rounded.Info, "Dijagnostika", "Ručna vožnja, animacije, dnevnik Bluetootha") { a.onDiagnostics() }
             }
             Text(
@@ -493,12 +498,51 @@ private fun CameraPage(brain: StevoBrain, a: SettingsActions) {
     }
 }
 
+private val BRAIN_MODES = listOf("gemini" to "Gemini", "local" to "Na mobitelu", "auto" to "Automatski")
+
 @Composable
-private fun GeminiPage(brain: StevoBrain) {
+private fun GeminiPage(brain: StevoBrain, local: LocalBrain, a: SettingsActions) {
     var key by remember { mutableStateOf(brain.apiKey) }
     var saved by remember { mutableStateOf(brain.apiKey.isNotBlank()) }
+    var mode by remember { mutableStateOf(brain.brainMode) }
+    val model by local.model.collectAsState()
     AppCard {
-        CardTitle("API ključ")
+        CardTitle("Tko razmišlja")
+        Segments(BRAIN_MODES, mode) { mode = it; brain.brainMode = it }
+        Hint(
+            when (mode) {
+                "gemini" -> "Gemini Live: najprirodniji glas i najpametniji, ali treba internet i ima kvotu."
+                "local" -> "Model na samom mobitelu: besplatno i bez kvote. Sporiji, ravniji glas, manje pametan."
+                else -> "Gemini dok radi; kad nema kvote ili interneta, sam se prebaci na model na mobitelu."
+            }
+        )
+    }
+    AppCard {
+        CardTitle("Model na mobitelu")
+        Hint("${LocalBrain.MODEL_NAME}, ${LocalBrain.MODEL_SIZE_TEXT}. Preuzima se jednom, preko Wi-Fija; drži aplikaciju otvorenom dok traje.")
+        val p = model.progress
+        if (p != null) {
+            LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(model.note, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                TextButton(onClick = { local.cancelDownload() }) { Text("Zaustavi") }
+            }
+        } else {
+            if (model.note.isNotEmpty()) Hint(model.note)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (model.ready) {
+                    Text("✓ spreman", color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { local.deleteModel() }) { Text("Obriši", color = MaterialTheme.colorScheme.error) }
+                } else {
+                    FilledTonalButton(onClick = { local.downloadModel() }) { Text("Preuzmi") }
+                    OutlinedButton(onClick = a.onImportModel) { Text("Učitaj datoteku") }
+                }
+            }
+        }
+        Hint("Za slušanje koristi prepoznavanje govora mobitela, a govori glasom mobitela (Postavke mobitela → Pretvaranje teksta u govor).")
+    }
+    AppCard {
+        CardTitle("Gemini API ključ")
         OutlinedTextField(
             key, { key = it; saved = false }, singleLine = true, placeholder = { Text("AIza…") },
             visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(),

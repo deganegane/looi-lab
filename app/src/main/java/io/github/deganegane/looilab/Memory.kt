@@ -105,10 +105,18 @@ class Memory(
     private val day = SimpleDateFormat("d.M.yyyy.", Locale.ROOT)
 
     /** What goes into Stevo's instructions at the start of a conversation. */
-    fun promptSection(): String {
+    fun promptSection(tools: Boolean = true): String {
         val now = SimpleDateFormat("EEEE d.M.yyyy. HH:mm", Locale("hr")).format(Date())
         val sb = StringBuilder("Right now it is $now.\n")
         if (level == 0) return sb.append("You have no memory of earlier conversations.").toString()
+        if (!tools) {
+            val n = _notes.value
+            if (n.isNotEmpty()) sb.append("\nWhat you know about the person:\n").append(n.joinToString("\n") { "- ${it.text}" }).append('\n')
+            if (level >= 2) _summaries.value.takeLast(4).takeIf { it.isNotEmpty() }?.let { s ->
+                sb.append("\nYour last conversations:\n").append(s.joinToString("\n") { "- ${it.text}" }).append('\n')
+            }
+            return sb.toString()
+        }
         sb.append("\nMemory: you remember things between conversations. The moment you learn ")
             .append("something worth keeping about the person or their life (their NAME first of all, ")
             .append("family, pets, work, plans, likes, important dates), call remember right away, ")
