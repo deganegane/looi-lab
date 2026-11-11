@@ -1,6 +1,10 @@
 package io.github.deganegane.looilab
 
+import android.annotation.SuppressLint
 import android.content.Context
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -22,7 +26,18 @@ import com.google.mlkit.genai.common.DownloadStatus
 import com.google.mlkit.genai.common.FeatureStatus
 import com.google.mlkit.genai.prompt.Generation
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import kotlin.math.sqrt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -98,6 +113,130 @@ class LocalBrain(
     @Volatile private var ttsReady = false
     private val speaking = AtomicInteger(0)
     @Volatile private var generating = false
+
+    // ------------------------------------------------------------------ Groq (big open models, free plan)
+    // Whisper hears, a large open model (OpenAI's gpt-oss by default) thinks, the phone speaks.
+
+    /** True while this conversation runs on Groq instead of a model on the phone. */
+    @Volatile private var groq = false
+    private val http by lazy { OkHttpClient.Builder().readTimeout(60, TimeUnit.SECONDS).build() }
+    private val GROQ = "https://api.groq.com/openai/v1"
+
+    private fun level(pcm: ByteArray, n: Int): Float {
+        var sum = 0.0; var c = 0; var i = 0
+        while (i + 1 < n) { val v = ((pcm[i + 1].toInt() shl 8) or (pcm[i].toInt() and 0xFF)).toShort().toInt(); sum += v.toDouble() * v; c++; i += 2 }
+        return if (c == 0) 0f else (sqrt(sum / c) / 6000.0).toFloat().coerceIn(0f, 1f)
+    }
+
+    /** Records one thing you say: waits for a voice, stops after a pause. Null when stopped or asleep. */
+    @SuppressLint("MissingPermission") // the microphone is asked for before any conversation starts
+    private fun recordUtterance(): ByteArray? {
+        val min = AudioRecord.getMinBufferSize(16_000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        val rec = AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, 16_000, AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT, maxOf(min, 6_400) * 2)
+        val frame = ByteArray(640) // 20 ms
+        val before = ArrayDeque<ByteArray>() // a little of what came just before the voice
+        val out = ByteArrayOutputStream()
+        var voiced = false; var loud = 0; var quietMs = 0; var ms = 0
+        val threshold = 0.04f
+        try {
+            rec.startRecording()
+            while (running) {
+                val n = rec.read(frame, 0, frame.size); if (n <= 0) continue
+                val lv = level(frame, n); face.mic = lv
+                if (!voiced) {
+                    before.addLast(frame.copyOf(n)); if (before.size > 20) before.removeFirst()
+                    loud = if (lv > threshold) loud + 1 else 0
+                    if (loud >= 5) { voiced = true; for (b in before) out.write(b, 0, b.size); before.clear(); lastHeard = System.currentTimeMillis() }
+                    else if (System.currentTimeMillis() - lastHeard > IDLE_MS) {
+                        main.post { stop("· ${brain.name} je zaspao (tišina). Dodirni lice za novi razgovor."); onIdle() }
+                        return null
+                    }
+                } else {
+                    out.write(frame, 0, n); ms += 20
+                    quietMs = if (lv < threshold * 0.6f) quietMs + 20 else 0
+                    if (quietMs >= 900 || ms >= 25_000) break
+                }
+            }
+        } finally {
+            runCatching { rec.stop() }; rec.release(); face.mic = 0f
+        }
+        return if (voiced && running) out.toByteArray() else null
+    }
+
+    private fun wav(pcm: ByteArray): ByteArray {
+        val h = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
+        h.put("RIFF".toByteArray()).putInt(36 + pcm.size).put("WAVE".toByteArray())
+        h.put("fmt ".toByteArray()).putInt(16).putShort(1).putShort(1).putInt(16_000).putInt(32_000).putShort(2).putShort(16)
+        h.put("data".toByteArray()).putInt(pcm.size)
+        return h.array() + pcm
+    }
+
+    private fun groqError(code: Int, body: String): String = when (code) {
+        401 -> "⚠ Groq ključ nije ispravan (Postavke → Mozak)."
+        429 -> "⚠ Potrošena je Groq kvota. Probaj malo kasnije."
+        else -> "⚠ Groq: $code ${runCatching { JSONObject(body).getJSONObject("error").getString("message") }.getOrDefault(body).take(120)}"
+    }
+
+    /** Speech → text with Whisper. Null on failure (the reason is logged). */
+    private fun transcribe(pcm: ByteArray): String? {
+        val form = MultipartBody.Builder().setType(MultipartBody.FORM)
+            .addFormDataPart("model", "whisper-large-v3-turbo")
+            .addFormDataPart("response_format", "json")
+            .addFormDataPart("file", "audio.wav", wav(pcm).toRequestBody("audio/wav".toMediaType()))
+        if (brain.language != "auto") form.addFormDataPart("language", brain.language)
+        val req = Request.Builder().url("$GROQ/audio/transcriptions").header("Authorization", "Bearer ${brain.groqKey}").post(form.build()).build()
+        return runCatching {
+            http.newCall(req).execute().use { r ->
+                val body = r.body?.string().orEmpty()
+                if (!r.isSuccessful) { val why = groqError(r.code, body); main.post { stop(why) }; return null }
+                JSONObject(body).optString("text").trim()
+            }
+        }.getOrElse { main.post { stop("⚠ Nema veze s Groqom: ${it.message?.take(80)}") }; null }
+    }
+
+    /** Whisper invents these out of silence and noise. */
+    private val phantom = listOf("hvala što pratite", "hvala na gledanju", "thank you for watching", "thanks for watching", "titlovi", "untertitel", "subtitles")
+    private fun isPhantom(t: String) = t.length < 2 || phantom.any { t.lowercase().contains(it) }
+
+    private fun listenWhisper() {
+        brain.publish(TalkState.LISTENING)
+        io.launch {
+            val pcm = recordUtterance() ?: return@launch
+            brain.publish(TalkState.CONNECTING)
+            val text = transcribe(pcm) ?: return@launch
+            if (!running) return@launch
+            if (isPhantom(text)) listen() else { lastHeard = System.currentTimeMillis(); answer(text) }
+        }
+    }
+
+    /** The reply, streamed token by token. */
+    private fun groqStream(text: String): Flow<String> = flow {
+        val messages = JSONArray().put(JSONObject().put("role", "system").put("content", persona()))
+        history.takeLast(16).forEach { (u, a) ->
+            messages.put(JSONObject().put("role", "user").put("content", u)); messages.put(JSONObject().put("role", "assistant").put("content", a))
+        }
+        messages.put(JSONObject().put("role", "user").put("content", text))
+        fun call(effort: Boolean) = http.newCall(Request.Builder().url("$GROQ/chat/completions")
+            .header("Authorization", "Bearer ${brain.groqKey}")
+            .post(JSONObject().put("model", brain.groqModel).put("messages", messages).put("stream", true).put("temperature", 0.8)
+                .apply { if (effort) put("reasoning_effort", "low") }
+                .toString().toRequestBody("application/json".toMediaType())).build()).execute()
+        var r = call(true)
+        if (r.code == 400) { r.close(); r = call(false) } // a model without a thinking dial
+        r.use { resp ->
+            if (!resp.isSuccessful) error(groqError(resp.code, resp.body?.string().orEmpty()))
+            val src = resp.body!!.source()
+            while (true) {
+                val line = src.readUtf8Line() ?: break
+                if (!line.startsWith("data:")) continue
+                val data = line.substring(5).trim()
+                if (data == "[DONE]") break
+                val delta = runCatching { JSONObject(data).getJSONArray("choices").getJSONObject(0).getJSONObject("delta") }.getOrNull() ?: continue
+                if (!delta.isNull("content")) emit(delta.getString("content"))
+            }
+        }
+    }.flowOn(Dispatchers.IO)
 
     // ------------------------------------------------------------------ Gemini Nano (built into the phone)
 
@@ -227,13 +366,15 @@ class LocalBrain(
         Tags are acted on and never spoken. Example: [happy][nod] Naravno, baš sam dobro!
     """.trimIndent() + "\n\n" + memory.promptSection(tools = false)
 
-    fun start() {
+    fun start(useGroq: Boolean = false) {
         if (running) return
-        if (!ready) { brain.log("⚠ Model na mobitelu nije spreman (Postavke → Mozak)."); face.say("Model na mobitelu nije spreman"); return }
+        groq = useGroq
+        if (groq && brain.groqKey.isBlank()) { brain.log("⚠ Upiši Groq ključ (Postavke → Mozak)."); face.say("Upiši Groq ključ u Postavkama"); return }
+        if (!groq && !ready) { brain.log("⚠ Model na mobitelu nije spreman (Postavke → Mozak)."); face.say("Model na mobitelu nije spreman"); return }
         running = true; errorsInRow = 0; lastHeard = System.currentTimeMillis()
         history.clear()
         brain.beginExternal()
-        brain.log("· ${brain.name} razmišlja na mobitelu (${if (nanoMode) "Gemini Nano" else MODEL_NAME})")
+        brain.log(if (groq) "· ${brain.name} razmišlja preko Groqa (${brain.groqModel})" else "· ${brain.name} razmišlja na mobitelu (${if (nanoMode) "Gemini Nano" else MODEL_NAME})")
         if (tts == null) tts = TextToSpeech(context) { status ->
             ttsReady = status == TextToSpeech.SUCCESS
             tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
@@ -242,7 +383,7 @@ class LocalBrain(
                 @Deprecated("old API") override fun onError(id: String?) = spoken()
             })
         }
-        if (nanoMode) { listen(); return }
+        if (groq || nanoMode) { listen(); return }
         scope.launch {
             if (engine == null) face.say("Učitavam model…")
             if (!ensureEngine()) { stop("⚠ Model se nije učitao. Probaj ga ponovno preuzeti."); return@launch }
@@ -287,7 +428,7 @@ class LocalBrain(
         main.post { runCatching { recognizer?.cancel(); recognizer?.destroy() }; recognizer = null }
         runCatching { tts?.stop() }; speaking.set(0); generating = false
         val job = thinking
-        if (nanoMode) job?.cancel()
+        if (groq || nanoMode) job?.cancel()
         scope.launch {
             // Stop a reply that is still being written, then drop the conversation; the engine stays loaded.
             var tries = 0
@@ -301,6 +442,7 @@ class LocalBrain(
 
     private fun listen() = main.post {
         if (!running) return@post
+        if (groq) { listenWhisper(); return@post }
         if (!SpeechRecognizer.isRecognitionAvailable(context)) { stop("⚠ Na mobitelu nema prepoznavanja govora."); return@post }
         brain.publish(TalkState.LISTENING)
         val r = recognizer ?: SpeechRecognizer.createSpeechRecognizer(context).also { recognizer = it; it.setRecognitionListener(listener) }
@@ -369,14 +511,21 @@ class LocalBrain(
             }
             runCatching {
                 val chunks: Flow<String> =
-                    if (nanoMode) nano.generateContentStream(nanoPrompt(text)).map { it.candidates.firstOrNull()?.text ?: "" }
+                    if (groq) groqStream(text)
+                    else if (nanoMode) nano.generateContentStream(nanoPrompt(text)).map { it.candidates.firstOrNull()?.text ?: "" }
                     else conversation!!.sendMessageAsync(text).map { it.toString() }
                 chunks.collect { chunk ->
                     // Some versions send the whole text so far, others only what is new.
                     if (all.isNotEmpty() && chunk.startsWith(all)) { all.setLength(0); all.append(chunk) } else all.append(chunk)
                     if (running) flush(false)
                 }
-            }.onFailure { if (running) brain.log("⚠ Model: ${it.message?.take(100)}") }
+            }.onFailure {
+                if (running) {
+                    val why = it.message.orEmpty()
+                    if (groq && why.startsWith("⚠")) { generating = false; main.post { stop(why) }; return@launch }
+                    brain.log("⚠ Model: ${why.take(100)}")
+                }
+            }
             if (running) flush(true)
             generating = false
             if (said.isNotBlank()) { brain.log("${brain.name}: ${said.toString().trim()}"); history += text to said.toString().trim() }

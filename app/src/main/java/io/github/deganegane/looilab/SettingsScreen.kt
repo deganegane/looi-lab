@@ -175,6 +175,7 @@ private fun Hub(ble: LooiBle, brain: StevoBrain, memory: Memory, local: LocalBra
                 HubRow(Icons.Rounded.Lock, "Mozak",
                     (BRAIN_MODES.firstOrNull { it.first == brain.brainMode }?.second ?: "") +
                         (if (brain.apiKey.isBlank()) " · nema Gemini ključa" else "") +
+                        (if (brain.groqKey.isNotBlank()) " · Groq ključ" else "") +
                         if (local.ready) " · model na mobitelu spreman" else " · model na mobitelu nije spreman") { onOpen(Page.GEMINI) }
                 HubRow(Icons.Rounded.Info, "Dijagnostika", "Ručna vožnja, animacije, dnevnik Bluetootha") { a.onDiagnostics() }
             }
@@ -498,7 +499,7 @@ private fun CameraPage(brain: StevoBrain, a: SettingsActions) {
     }
 }
 
-private val BRAIN_MODES = listOf("gemini" to "Gemini", "local" to "Na mobitelu", "auto" to "Automatski")
+private val BRAIN_MODES = listOf("gemini" to "Gemini", "groq" to "Groq", "local" to "Mobitel", "auto" to "Auto")
 
 @Composable
 private fun GeminiPage(brain: StevoBrain, local: LocalBrain, a: SettingsActions) {
@@ -512,10 +513,27 @@ private fun GeminiPage(brain: StevoBrain, local: LocalBrain, a: SettingsActions)
         Hint(
             when (mode) {
                 "gemini" -> "Gemini Live: najprirodniji glas i najpametniji, ali treba internet i ima kvotu."
+                "groq" -> "Veliki otvoreni model preko Groqa: besplatno, pametno, dobar hrvatski. Govori glasom mobitela."
                 "local" -> "Model na samom mobitelu: besplatno i bez kvote. Sporiji, ravniji glas, manje pametan."
-                else -> "Gemini dok radi; kad nema kvote ili interneta, sam se prebaci na model na mobitelu."
+                else -> "Gemini dok radi; kad nema kvote, prelazi na Groq (ako ima ključ), a bez interneta na model na mobitelu."
             }
         )
+    }
+    var groqKey by remember { mutableStateOf(brain.groqKey) }
+    var groqSaved by remember { mutableStateOf(brain.groqKey.isNotBlank()) }
+    var groqModel by remember { mutableStateOf(brain.groqModel) }
+    AppCard {
+        CardTitle("Groq")
+        OutlinedTextField(
+            groqKey, { groqKey = it; groqSaved = false }, singleLine = true, label = { Text("API ključ") }, placeholder = { Text("gsk_…") },
+            visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(),
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            FilledTonalButton(onClick = { brain.groqKey = groqKey; groqSaved = groqKey.isNotBlank() }) { Text("Spremi") }
+            if (groqSaved) Text("   ✓ spremljen", color = MaterialTheme.colorScheme.primary)
+        }
+        OutlinedTextField(groqModel, { groqModel = it; brain.groqModel = it }, singleLine = true, label = { Text("Model") }, modifier = Modifier.fillMaxWidth())
+        Hint("Besplatan ključ, bez kartice: console.groq.com → API Keys. Sluša Whisper, razmišlja model iz polja iznad (zadano OpenAI-jev otvoreni gpt-oss-120b).")
     }
     var kind by remember { mutableStateOf(brain.localModel) }
     val nano by local.nanoState.collectAsState()

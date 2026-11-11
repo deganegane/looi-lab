@@ -14,8 +14,8 @@ android {
         applicationId = "io.github.deganegane.looilab"
         minSdk = 26
         targetSdk = 36
-        versionCode = 17
-        versionName = "0.17"
+        versionCode = 18
+        versionName = "0.18"
         // Phones only (Pixel etc.): keeps the APK small now that it carries an LLM runtime.
         ndk { abiFilters += "arm64-v8a" }
     }

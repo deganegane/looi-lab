@@ -241,7 +241,15 @@ class StevoBrain(
 
     fun toggle() { if (_state.value == TalkState.OFF) start() else stop("") }
 
-    /** "gemini", "local" (the model on the phone) or "auto" (Gemini, the phone when it fails). */
+    /** Groq: free plan with big open models and Whisper. */
+    var groqKey: String
+        get() = prefs.getString("groqKey", "") ?: ""
+        set(v) = prefs.edit().putString("groqKey", v.trim()).apply()
+    var groqModel: String
+        get() = prefs.getString("groqModel", "openai/gpt-oss-120b")?.takeIf { it.isNotBlank() } ?: "openai/gpt-oss-120b"
+        set(v) = prefs.edit().putString("groqModel", v.trim()).apply()
+
+    /** "gemini", "groq", "local" (a model on the phone) or "auto" (Gemini, then Groq, then the phone). */
     var brainMode: String
         get() = prefs.getString("brain", "auto") ?: "auto"
         set(v) = prefs.edit().putString("brain", v).apply()
