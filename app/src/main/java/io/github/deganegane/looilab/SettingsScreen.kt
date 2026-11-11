@@ -590,6 +590,11 @@ private fun GeminiPage(brain: StevoBrain, local: LocalBrain, a: SettingsActions)
             smart = it; brain.smart = it
         }
         HorizontalDivider()
+        var saver by remember { mutableStateOf(brain.saveTokens) }
+        SwitchRow("Štedljivo slušanje", "Geminiju šalje zvuk samo dok govoriš, a ne i tišinu. Troši puno manje kvote. Isključi ako te ne čuje kad govoriš tiho.", saver) {
+            saver = it; brain.saveTokens = it
+        }
+        HorizontalDivider()
         SwitchRow("Google pretraživanje", "Zna aktualne stvari: vrijeme, vijesti, rezultate, radno vrijeme…", search) {
             search = it; brain.search = it
         }

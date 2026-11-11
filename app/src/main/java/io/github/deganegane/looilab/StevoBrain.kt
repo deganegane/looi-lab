@@ -163,6 +163,12 @@ class StevoBrain(
     var lightMode: String
         get() = prefs.getString("light", "auto") ?: "auto"
         set(v) = prefs.edit().putString("light", v).apply()
+    /** Send audio (and pictures) to Gemini only around your voice, not the silence in between. */
+    var saveTokens: Boolean
+        get() = prefs.getBoolean("saver", true)
+        set(v) = prefs.edit().putBoolean("saver", v).apply()
+    @Volatile private var seeUntil = 0L
+
     /** The thinking model: better answers, a bit more delay. */
     var smart: Boolean
         get() = prefs.getBoolean("smart", false)
@@ -434,7 +440,8 @@ class StevoBrain(
                 line("· $name sluša" + if (vision) " i gleda" else "")
                 if (vision) eyes.onFrame = { jpg ->
                     val b64 = Base64.encodeToString(jpg, Base64.NO_WRAP)
-                    if (socketReady) ws?.send("""{"realtimeInput":{"video":{"mimeType":"image/jpeg","data":"$b64"}}}""")
+                    // With the saver, pictures only go up around the moments you speak.
+                    if (socketReady && (!saveTokens || System.currentTimeMillis() < seeUntil)) ws?.send("""{"realtimeInput":{"video":{"mimeType":"image/jpeg","data":"$b64"}}}""")
                 }
                 startAudio()
                 _state.value = TalkState.LISTENING
@@ -578,20 +585,45 @@ class StevoBrain(
             }
             rec.startRecording()
             val buf = ByteArray(3200) // 100 ms
+            // Saver: Gemini bills audio by the second, silence included. So only what is around
+            // your voice goes up: a little before it (so the first word is whole), the speech,
+            // and a second after it (so Gemini hears that you stopped). Nothing in between.
+            val saver = saveTokens
+            val before = ArrayDeque<ByteArray>()
+            var noise = 0.01f; var loud = 0; var voiceUntil = 0L; var streaming = false
+            fun up(pcm: ByteArray) {
+                val b64 = Base64.encodeToString(pcm, Base64.NO_WRAP)
+                if (socketReady) ws?.send("""{"realtimeInput":{"audio":{"mimeType":"audio/pcm;rate=$IN_RATE","data":"$b64"}}}""")
+            }
             try {
                 while (running && !Thread.currentThread().isInterrupted) {
                     val n = rec.read(buf, 0, buf.size)
                     if (n <= 0) continue
                     val now = System.currentTimeMillis()
                     val stevoTalking = now < speakingUntil || playQueue.isNotEmpty()
-                    // Your voice keeps the conversation open, even before Gemini transcribes it.
-                    val mic = if (stevoTalking) 0f else level(buf.copyOf(n))
+                    val heard = level(buf.copyOf(n))
+                    val mic = if (stevoTalking) 0f else heard
                     face.mic = mic
-                    if (mic > 0.05f) lastActivity = now
                     if (!stevoTalking && _state.value == TalkState.SPEAKING) _state.value = TalkState.LISTENING
-                    val send = if (stevoTalking && !allowInterrupt) ByteArray(n) else buf.copyOf(n) // silence keeps the stream alive
-                    val b64 = Base64.encodeToString(send, Base64.NO_WRAP)
-                    if (socketReady) ws?.send("""{"realtimeInput":{"audio":{"mimeType":"audio/pcm;rate=$IN_RATE","data":"$b64"}}}""")
+                    val muted = stevoTalking && !allowInterrupt
+                    // Is somebody speaking? Louder than the room for two frames in a row.
+                    val threshold = maxOf(0.018f, noise * 2.5f + 0.008f)
+                    if (!muted && heard > threshold) { if (++loud >= 2) voiceUntil = now + 1_300 }
+                    else { loud = 0; if (!muted && now > voiceUntil) noise = noise * 0.95f + heard * 0.05f }
+                    val voice = now < voiceUntil
+                    if (voice) { lastActivity = now; seeUntil = now + 4_000 }
+                    if (!saver) {
+                        up(if (muted) ByteArray(n) else buf.copyOf(n))
+                    } else if (voice && !muted) {
+                        if (!streaming) { streaming = true; for (p in before) up(p); before.clear() }
+                        up(buf.copyOf(n))
+                    } else {
+                        if (streaming) {
+                            streaming = false
+                            if (socketReady) ws?.send("""{"realtimeInput":{"audioStreamEnd":true}}""")
+                        }
+                        if (!muted) { before.addLast(buf.copyOf(n)); if (before.size > 4) before.removeFirst() } else before.clear()
+                    }
                     if (!stevoTalking && now - lastActivity > IDLE_MS) {
                         stop("· $name je zaspao (tišina). Dodirni lice za novi razgovor.")
                         onIdle()
