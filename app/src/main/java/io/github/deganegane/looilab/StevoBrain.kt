@@ -364,12 +364,15 @@ class StevoBrain(
         }
         if (memory.level >= 3) tools.put(textTool("recall", "Search all earlier conversations for something.",
             "query", "Key words to look for"))
+        // The thinking model reasons in the background and wants its tools declared non-blocking.
+        if (smart) for (i in 0 until tools.length()) tools.getJSONObject(i).put("behavior", "NON_BLOCKING")
         val toolList = JSONArray().put(JSONObject().put("functionDeclarations", tools))
         if (search) toolList.put(JSONObject().put("googleSearch", JSONObject()))
         val setup = JSONObject()
             .put("model", if (smart) MODEL_SMART else MODEL)
             .put("generationConfig", JSONObject()
                 .put("responseModalities", JSONArray(listOf("AUDIO")))
+                .apply { if (smart) put("thinkingConfig", JSONObject().put("thinkingLevel", "LOW")) }
                 .put("speechConfig", JSONObject().put("voiceConfig", JSONObject()
                     .put("prebuiltVoiceConfig", JSONObject().put("voiceName", voice)))))
             .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", persona(name, personality, language, vision, swearing, memory.promptSection())))))
