@@ -14,8 +14,8 @@ android {
         applicationId = "io.github.deganegane.looilab"
         minSdk = 26
         targetSdk = 36
-        versionCode = 16
-        versionName = "0.16"
+        versionCode = 17
+        versionName = "0.17"
         // Phones only (Pixel etc.): keeps the APK small now that it carries an LLM runtime.
         ndk { abiFilters += "arm64-v8a" }
     }
@@ -72,6 +72,8 @@ dependencies {
     implementation("com.google.mlkit:face-detection:16.1.7")
     // The brain on the phone: Gemma through LiteRT-LM (GPU, falls back to CPU).
     implementation("com.google.ai.edge.litertlm:litertlm-android:0.18.0")
+    // Gemini Nano, the model built into the phone (through AICore).
+    implementation("com.google.mlkit:genai-prompt:1.0.0-beta5")
 
     testImplementation("junit:junit:4.13.2")
 }

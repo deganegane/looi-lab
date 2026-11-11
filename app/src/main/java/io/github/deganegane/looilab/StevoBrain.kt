@@ -246,6 +246,11 @@ class StevoBrain(
         get() = prefs.getString("brain", "auto") ?: "auto"
         set(v) = prefs.edit().putString("brain", v).apply()
 
+    /** Which model thinks on the phone: "gemma" (downloaded) or "nano" (built into the phone). */
+    var localModel: String
+        get() = prefs.getString("localModel", "gemma") ?: "gemma"
+        set(v) = prefs.edit().putString("localModel", v).apply()
+
     /** Gemini could not be reached (quota, no internet, bad key) before anything was said. */
     var onFailed: (() -> Unit)? = null
     @Volatile private var heardUser = false

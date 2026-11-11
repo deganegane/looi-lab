@@ -18,6 +18,11 @@ import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.SamplerConfig
+import com.google.mlkit.genai.common.DownloadStatus
+import com.google.mlkit.genai.common.FeatureStatus
+import com.google.mlkit.genai.prompt.Generation
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -93,6 +98,55 @@ class LocalBrain(
     @Volatile private var ttsReady = false
     private val speaking = AtomicInteger(0)
     @Volatile private var generating = false
+
+    // ------------------------------------------------------------------ Gemini Nano (built into the phone)
+
+    /** True: Gemini Nano through ML Kit; false: Gemma through LiteRT-LM. */
+    private val nanoMode: Boolean get() = brain.localModel == "nano"
+    private val nano by lazy { Generation.getClient() }
+    @Volatile private var nanoOk = false
+    private val _nano = MutableStateFlow("")
+    /** What the phone says about Gemini Nano, for the settings page. */
+    val nanoState: StateFlow<String> = _nano.asStateFlow()
+    private val history = ArrayList<Pair<String, String>>()
+
+    /** The chosen on-device model can be used right now. */
+    val ready: Boolean get() = if (nanoMode) nanoOk else modelReady
+
+    fun refreshNano(download: Boolean = false) {
+        io.launch {
+            runCatching {
+                when (nano.checkStatus()) {
+                    FeatureStatus.AVAILABLE -> { nanoOk = true; _nano.value = "✓ Gemini Nano je spreman na ovom mobitelu." }
+                    FeatureStatus.DOWNLOADING -> { nanoOk = false; _nano.value = "Mobitel upravo preuzima Gemini Nano, probaj malo kasnije." }
+                    FeatureStatus.DOWNLOADABLE -> {
+                        nanoOk = false
+                        if (!download) _nano.value = "Gemini Nano se može preuzeti na ovaj mobitel."
+                        else nano.download().collect { st ->
+                            when (st) {
+                                is DownloadStatus.DownloadProgress -> _nano.value = "Preuzimam… %.0f MB".format(st.totalBytesDownloaded / 1e6)
+                                is DownloadStatus.DownloadFailed -> _nano.value = "Preuzimanje nije uspjelo: ${st.e.message}"
+                                DownloadStatus.DownloadCompleted -> { nanoOk = true; _nano.value = "✓ Gemini Nano je spreman na ovom mobitelu." }
+                                else -> _nano.value = "Preuzimam Gemini Nano…"
+                            }
+                        }
+                    }
+                    else -> { nanoOk = false; _nano.value = "Gemini Nano nije dostupan na ovom mobitelu (ili AICore još nije spreman)." }
+                }
+            }.onFailure { nanoOk = false; _nano.value = "Gemini Nano: ${it.message ?: it.javaClass.simpleName}" }
+        }
+    }
+
+    init { refreshNano() }
+
+    private fun nanoPrompt(text: String): String = buildString {
+        append(persona())
+        if (history.isNotEmpty()) {
+            append("\n\nThe conversation so far:\n")
+            history.takeLast(6).forEach { (u, a) -> append("Person: ").append(u).append('\n').append("You: ").append(a).append('\n') }
+        }
+        append("\nPerson: ").append(text).append("\nYou:")
+    }
 
     // ------------------------------------------------------------------ the model file
 
@@ -175,10 +229,11 @@ class LocalBrain(
 
     fun start() {
         if (running) return
-        if (!modelReady) { brain.log("⚠ Lokalni model nije preuzet (Postavke → Mozak)."); face.say("Lokalni model nije preuzet"); return }
+        if (!ready) { brain.log("⚠ Model na mobitelu nije spreman (Postavke → Mozak)."); face.say("Model na mobitelu nije spreman"); return }
         running = true; errorsInRow = 0; lastHeard = System.currentTimeMillis()
+        history.clear()
         brain.beginExternal()
-        brain.log("· ${brain.name} razmišlja na mobitelu ($MODEL_NAME)")
+        brain.log("· ${brain.name} razmišlja na mobitelu (${if (nanoMode) "Gemini Nano" else MODEL_NAME})")
         if (tts == null) tts = TextToSpeech(context) { status ->
             ttsReady = status == TextToSpeech.SUCCESS
             tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
@@ -187,6 +242,7 @@ class LocalBrain(
                 @Deprecated("old API") override fun onError(id: String?) = spoken()
             })
         }
+        if (nanoMode) { listen(); return }
         scope.launch {
             if (engine == null) face.say("Učitavam model…")
             if (!ensureEngine()) { stop("⚠ Model se nije učitao. Probaj ga ponovno preuzeti."); return@launch }
@@ -231,6 +287,7 @@ class LocalBrain(
         main.post { runCatching { recognizer?.cancel(); recognizer?.destroy() }; recognizer = null }
         runCatching { tts?.stop() }; speaking.set(0); generating = false
         val job = thinking
+        if (nanoMode) job?.cancel()
         scope.launch {
             // Stop a reply that is still being written, then drop the conversation; the engine stays loaded.
             var tries = 0
@@ -311,8 +368,10 @@ class LocalBrain(
                 if (speech.isNotEmpty()) { said.append(speech).append(' '); say(speech) }
             }
             runCatching {
-                conversation!!.sendMessageAsync(text).collect { m ->
-                    val chunk = m.toString()
+                val chunks: Flow<String> =
+                    if (nanoMode) nano.generateContentStream(nanoPrompt(text)).map { it.candidates.firstOrNull()?.text ?: "" }
+                    else conversation!!.sendMessageAsync(text).map { it.toString() }
+                chunks.collect { chunk ->
                     // Some versions send the whole text so far, others only what is new.
                     if (all.isNotEmpty() && chunk.startsWith(all)) { all.setLength(0); all.append(chunk) } else all.append(chunk)
                     if (running) flush(false)
@@ -320,7 +379,7 @@ class LocalBrain(
             }.onFailure { if (running) brain.log("⚠ Model: ${it.message?.take(100)}") }
             if (running) flush(true)
             generating = false
-            if (said.isNotBlank()) brain.log("${brain.name}: ${said.toString().trim()}")
+            if (said.isNotBlank()) { brain.log("${brain.name}: ${said.toString().trim()}"); history += text to said.toString().trim() }
             if (running && speaking.get() == 0) listen()
         }
     }

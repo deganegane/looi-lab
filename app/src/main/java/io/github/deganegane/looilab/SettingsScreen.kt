@@ -175,7 +175,7 @@ private fun Hub(ble: LooiBle, brain: StevoBrain, memory: Memory, local: LocalBra
                 HubRow(Icons.Rounded.Lock, "Mozak",
                     (BRAIN_MODES.firstOrNull { it.first == brain.brainMode }?.second ?: "") +
                         (if (brain.apiKey.isBlank()) " · nema Gemini ključa" else "") +
-                        if (local.modelReady) " · model na mobitelu spreman" else " · model nije preuzet") { onOpen(Page.GEMINI) }
+                        if (local.ready) " · model na mobitelu spreman" else " · model na mobitelu nije spreman") { onOpen(Page.GEMINI) }
                 HubRow(Icons.Rounded.Info, "Dijagnostika", "Ručna vožnja, animacije, dnevnik Bluetootha") { a.onDiagnostics() }
             }
             Text(
@@ -517,25 +517,37 @@ private fun GeminiPage(brain: StevoBrain, local: LocalBrain, a: SettingsActions)
             }
         )
     }
+    var kind by remember { mutableStateOf(brain.localModel) }
+    val nano by local.nanoState.collectAsState()
     AppCard {
         CardTitle("Model na mobitelu")
-        Hint("${LocalBrain.MODEL_NAME}, ${LocalBrain.MODEL_SIZE_TEXT}. Preuzima se jednom, preko Wi-Fija; drži aplikaciju otvorenom dok traje.")
-        val p = model.progress
-        if (p != null) {
-            LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(model.note, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                TextButton(onClick = { local.cancelDownload() }) { Text("Zaustavi") }
+        Segments(listOf("gemma" to "Gemma", "nano" to "Gemini Nano"), kind) { kind = it; brain.localModel = it; if (it == "nano") local.refreshNano() }
+        if (kind == "nano") {
+            Hint("Ugrađen u mobitel: nema preuzimanja od 2,6 GB i prilagođen je Pixelu. Hrvatski mu je možda slabiji; usporedi ga s Gemmom.")
+            if (nano.isNotEmpty()) Text(nano, style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { local.refreshNano() }) { Text("Provjeri") }
+                if (!local.ready) FilledTonalButton(onClick = { local.refreshNano(download = true) }) { Text("Preuzmi") }
             }
         } else {
-            if (model.note.isNotEmpty()) Hint(model.note)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (model.ready) {
-                    Text("✓ spreman", color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
-                    TextButton(onClick = { local.deleteModel() }) { Text("Obriši", color = MaterialTheme.colorScheme.error) }
-                } else {
-                    FilledTonalButton(onClick = { local.downloadModel() }) { Text("Preuzmi") }
-                    OutlinedButton(onClick = a.onImportModel) { Text("Učitaj datoteku") }
+            Hint("${LocalBrain.MODEL_NAME}, ${LocalBrain.MODEL_SIZE_TEXT}. Preuzima se jednom, preko Wi-Fija; drži aplikaciju otvorenom dok traje. Može se i doučiti.")
+            val p = model.progress
+            if (p != null) {
+                LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(model.note, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { local.cancelDownload() }) { Text("Zaustavi") }
+                }
+            } else {
+                if (model.note.isNotEmpty()) Hint(model.note)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (model.ready) {
+                        Text("✓ spreman", color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { local.deleteModel() }) { Text("Obriši", color = MaterialTheme.colorScheme.error) }
+                    } else {
+                        FilledTonalButton(onClick = { local.downloadModel() }) { Text("Preuzmi") }
+                        OutlinedButton(onClick = a.onImportModel) { Text("Učitaj datoteku") }
+                    }
                 }
             }
         }

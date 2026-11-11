@@ -119,7 +119,7 @@ class MainActivity : ComponentActivity() {
     /** Gemini, the model on the phone, or Gemini with the phone as the fallback. */
     private fun startBrain() {
         when (brain.brainMode) {
-            "local" -> if (local.modelReady) local.start() else face.say("Preuzmi model: Postavke → Mozak")
+            "local" -> if (local.ready) local.start() else face.say("Model nije spreman: Postavke → Mozak")
             else -> brain.start()
         }
     }
@@ -204,7 +204,7 @@ class MainActivity : ComponentActivity() {
             onExpression = { body.onExpression(it) })
         // Gemini out of quota, offline or without a key: the phone's own model takes over.
         brain.onFailed = {
-            if (brain.brainMode == "auto" && local.modelReady) runOnUiThread {
+            if (brain.brainMode == "auto" && local.ready) runOnUiThread {
                 face.say("Gemini nije dostupan, razmišljam sam")
                 local.start()
             }
