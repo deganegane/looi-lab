@@ -427,6 +427,7 @@ class LocalBrain(
         running = false
         main.post { runCatching { recognizer?.cancel(); recognizer?.destroy() }; recognizer = null }
         runCatching { tts?.stop() }; speaking.set(0); generating = false
+        main.postDelayed({ hush(false) }, 400) // after the recognizer's last chime
         val job = thinking
         if (groq || nanoMode) job?.cancel()
         scope.launch {
@@ -440,11 +441,25 @@ class LocalBrain(
 
     // ---- listening
 
+    // Android's speech recognition plays a chime every time it starts and stops listening, and it
+    // restarts every few seconds while nobody speaks. Those chimes are silenced while he listens;
+    // the sound comes back before he speaks and when the conversation ends.
+    private val audio = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+    private var hushed = false
+    private fun hush(on: Boolean) {
+        if (hushed == on) return
+        hushed = on
+        val how = if (on) android.media.AudioManager.ADJUST_MUTE else android.media.AudioManager.ADJUST_UNMUTE
+        for (stream in intArrayOf(android.media.AudioManager.STREAM_MUSIC, android.media.AudioManager.STREAM_NOTIFICATION, android.media.AudioManager.STREAM_SYSTEM))
+            runCatching { audio.adjustStreamVolume(stream, how, 0) }
+    }
+
     private fun listen() = main.post {
         if (!running) return@post
         if (groq) { listenWhisper(); return@post }
         if (!SpeechRecognizer.isRecognitionAvailable(context)) { stop("⚠ Na mobitelu nema prepoznavanja govora."); return@post }
         brain.publish(TalkState.LISTENING)
+        hush(true)
         val r = recognizer ?: SpeechRecognizer.createSpeechRecognizer(context).also { recognizer = it; it.setRecognitionListener(listener) }
         r.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
             .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -552,6 +567,7 @@ class LocalBrain(
         val t = tts
         if (t == null || !ttsReady) return
         if (speaking.getAndIncrement() == 0) {
+            hush(false)
             brain.publish(TalkState.SPEAKING)
             runCatching { t.setLanguage(Locale.forLanguageTag(languageTag())) }
             t.setSpeechRate(brain.speed); t.setPitch(brain.pitch)
