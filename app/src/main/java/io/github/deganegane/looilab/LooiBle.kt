@@ -328,12 +328,33 @@ class LooiBle(private val context: Context) {
 
     suspend fun stopScript() = write(LooiProtocol.SCRIPT, LooiProtocol.STOP_SCRIPT)
 
-    /** When the last gesture (not face tracking) started: tracking leaves the body alone for a bit. */
+    /** When the last gesture (not face tracking) started. */
     @Volatile var lastGestureAt = 0L
+    /** Until when the last gesture runs: tracking and idle behaviours wait for it. */
+    @Volatile var busyUntil = 0L
+    /** Where the head is (0 up … 100 down), as far as our own scripts moved it. */
+    @Volatile var headPos = LooiProtocol.HEAD_MIDDLE
+    /** Driving (script channel 1): until when, and which way (+1 forward, -1 back). */
+    @Volatile var driveUntil = 0L
+    @Volatile var lastDriveDir = 0
 
     suspend fun playScript(keyframes: ByteArray, label: String, gesture: Boolean = true) {
         if (_state.value != ConnState.READY) return
-        if (gesture) lastGestureAt = System.currentTimeMillis()
+        val now = System.currentTimeMillis()
+        // What this script does: how long it runs, where the head ends, whether it drives.
+        var maxTick = 0; var headTick = -1; var dir = 0
+        var i = 0
+        while (i + 2 < keyframes.size) {
+            val t = keyframes[i].toInt() and 0xFF; val v = keyframes[i + 1].toInt(); val c = keyframes[i + 2].toInt()
+            if (t != 0xFF) {
+                if (t > maxTick) maxTick = t
+                if (c == 3 && t >= headTick) { headTick = t; headPos = v.coerceIn(0, 100) }
+                if (c == 1 && v != 0 && dir == 0) dir = if (v > 0) 1 else -1
+            }
+            i += 3
+        }
+        if (gesture) { lastGestureAt = now; busyUntil = now + maxTick * 40L }
+        if (dir != 0) { lastDriveDir = dir; driveUntil = now + maxTick * 40L }
         scriptId = if (scriptId >= 0xF0) 0x40 else scriptId + 1
         note("··", "$label → skripta #${"%02x".format(scriptId)}")
         stopScript()

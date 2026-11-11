@@ -308,6 +308,18 @@ private fun CharacterPage(brain: StevoBrain) {
             }
         )
     }
+    var auto by remember { mutableIntStateOf(brain.autonomy) }
+    AppCard {
+        CardTitle("Kad je sam")
+        Segments(listOf(0 to "Miruje", 1 to "Na mjestu", 2 to "Istražuje"), auto) { auto = it; brain.autonomy = it }
+        Hint(
+            when (auto) {
+                0 -> "Ne miče se dok mu se ne obratiš."
+                1 -> "Gleda okolo, proteže se, uzdahne od dosade, pozdravi te kad te vidi. Ne vozi."
+                else -> "Uz to i prošeta po stolu u kratkim koracima. Staje na rubu (senzori poda) i vraća se, ali prvi put budi uz njega."
+            }
+        )
+    }
     AppCard {
         SwitchRow("Smije psovati", "Prost i bezobrazan humor kao među prijateljima. Bez uvreda koje stvarno vrijeđaju.", swearing) {
             swearing = it; brain.swearing = it

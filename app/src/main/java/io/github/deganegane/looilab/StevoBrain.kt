@@ -176,6 +176,11 @@ class StevoBrain(
         get() = prefs.getInt("lively", 2)
         set(v) = prefs.edit().putInt("lively", v).apply()
 
+    /** On his own: 0 stays still, 1 moves on the spot, 2 also wanders over the desk. */
+    var autonomy: Int
+        get() = prefs.getInt("autonomy", 2)
+        set(v) = prefs.edit().putInt("autonomy", v).apply()
+
     /** He may swear and be crude when it fits (only if the owner wants that). */
     var swearing: Boolean
         get() = prefs.getBoolean("swearing", false)
@@ -263,7 +268,7 @@ class StevoBrain(
         if (reason.isNotEmpty()) line(reason)
         val lines = synchronized(session) { session.toList().also { session.clear() } }
         runCatching { memory.endConversation(lines, language) }
-        face.talk = 0f
+        face.talk = 0f; face.mic = 0f
         face.set(baseBefore)
         _state.value = TalkState.OFF
     }
@@ -287,7 +292,8 @@ class StevoBrain(
             .put("parameters", JSONObject().put("type", "OBJECT")
                 .put("properties", JSONObject().put("action", enumParam(
                     "nod = yes, shake = no, look_up, look_down, turn_left, turn_right, " +
-                        "forward, back = a little drive, wiggle = excited, dance = celebrate",
+                        "forward, back = a little drive, wiggle = excited, dance = celebrate, " +
+                        "spin = a full turn, bow = thanks or greeting, stretch, look_around",
                     Gestures.all.keys.toList())))
                 .put("required", JSONArray(listOf("action"))))
         val photo = JSONObject()
@@ -450,7 +456,7 @@ class StevoBrain(
                     val g = Gestures.all[args.optString("action")]
                     if (g == null) "unknown action"
                     else if (ble.state.value != ConnState.READY) "the robot base is not connected, only the face can move"
-                    else if (args.optString("action") in setOf("forward", "back", "dance", "wiggle") && ble.atEdge)
+                    else if (args.optString("action") in setOf("forward", "back", "dance") && ble.atEdge)
                         "refused: you are standing at the edge of the table, the floor sensors see the drop. Tell the person you would fall off."
                     else { ble.launch { g(this) }; "ok" }
                 }
@@ -550,7 +556,9 @@ class StevoBrain(
                     val now = System.currentTimeMillis()
                     val stevoTalking = now < speakingUntil || playQueue.isNotEmpty()
                     // Your voice keeps the conversation open, even before Gemini transcribes it.
-                    if (!stevoTalking && level(buf.copyOf(n)) > 0.05f) lastActivity = now
+                    val mic = if (stevoTalking) 0f else level(buf.copyOf(n))
+                    face.mic = mic
+                    if (mic > 0.05f) lastActivity = now
                     if (!stevoTalking && _state.value == TalkState.SPEAKING) _state.value = TalkState.LISTENING
                     val send = if (stevoTalking && !allowInterrupt) ByteArray(n) else buf.copyOf(n) // silence keeps the stream alive
                     val b64 = Base64.encodeToString(send, Base64.NO_WRAP)
@@ -582,18 +590,22 @@ class StevoBrain(
 
 /** Body language Gemini can ask for, built from the animations the official app used. */
 object Gestures {
-    private fun keys(label: String, k: ByteArray): suspend (LooiBle) -> Unit = { it.playScript(k, "Stevo: $label") }
+    private fun move(label: String, k: (LooiBle) -> ByteArray): suspend (LooiBle) -> Unit = { it.playScript(k(it), "Stevo: $label") }
     private fun anim(n: Int): suspend (LooiBle) -> Unit = { it.playScript(CapturedAnims.all[n - 1].keyframes, "Stevo: animacija $n") }
     val all: Map<String, suspend (LooiBle) -> Unit> = linkedMapOf(
-        "nod" to anim(2),
-        "shake" to anim(17),
-        "look_up" to keys("pogled gore", LooiProtocol.keys(0, 50, 3, 8, 22, 3, 38, 22, 3, 50, 50, 3)),
-        "look_down" to keys("pogled dolje", LooiProtocol.keys(0, 50, 3, 8, 78, 3, 38, 78, 3, 50, 50, 3)),
+        "nod" to move("kimanje", Moves::nod),
+        "shake" to move("odmahivanje", Moves::shake),
+        "look_up" to move("pogled gore", Moves::lookUp),
+        "look_down" to move("pogled dolje", Moves::lookDown),
         "turn_left" to anim(4),
         "turn_right" to anim(5),
         "forward" to anim(15),
         "back" to anim(3),
-        "wiggle" to anim(11),
+        "wiggle" to move("migoljenje", Moves::wiggle),
         "dance" to anim(23),
+        "spin" to move("vrtnja", Moves::spin),
+        "bow" to move("naklon", Moves::bow),
+        "stretch" to move("protezanje", Moves::stretch),
+        "look_around" to move("gleda okolo") { Moves.lookAround(it, 1) },
     )
 }

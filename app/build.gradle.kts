@@ -14,8 +14,8 @@ android {
         applicationId = "io.github.deganegane.looilab"
         minSdk = 26
         targetSdk = 36
-        versionCode = 14
-        versionName = "0.14"
+        versionCode = 15
+        versionName = "0.15"
     }
 
     // One permanent key, so every new APK installs over the previous one.

@@ -3,6 +3,12 @@ package io.github.deganegane.looilab
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
@@ -41,6 +47,9 @@ enum class Expr(val label: String) {
     BORED("dosadno"), EXCITED("oduševljeno"), CONFUSED("zbunjeno"), SHY("sramežljivo"),
 }
 
+/** What the strip under the eyes shows. */
+enum class Hud { NONE, CONNECTING, LISTENING }
+
 /** What the face shows. [flash] shows an expression for a moment, then goes back to [base]. */
 @Stable
 class FaceState {
@@ -55,6 +64,18 @@ class FaceState {
     var lookY by mutableStateOf(0f)
     /** 0..1 loudness while Stevo speaks: the filaments pulse with his voice. */
     var talk by mutableStateOf(0f)
+    /** 0..1 loudness of the microphone while he listens: the line under his eyes. */
+    var mic by mutableStateOf(0f)
+    var hud by mutableStateOf(Hud.NONE)
+    /** Asleep: slow breathing and little z's. */
+    var asleep by mutableStateOf(false)
+    /** A short line of text shown under the face for a moment. */
+    var message by mutableStateOf<String?>(null)
+        private set
+    var messageId by mutableStateOf(0)
+        private set
+    fun say(text: String) { message = text; messageId++ }
+    fun clearMessage(id: Int) { if (id == messageId) message = null }
 
     fun set(e: Expr) { base = e; current = e; flashId++ }
     fun flash(e: Expr) { current = e; flashId++ }
@@ -245,6 +266,22 @@ fun NixieFace(state: FaceState, modifier: Modifier = Modifier.fillMaxSize()) {
         }
     }
 
+    // A new expression pops in with a little overshoot.
+    val pop = remember { Animatable(1f) }
+    LaunchedEffect(state.current) {
+        pop.snapTo(1.16f); pop.animateTo(1f, spring(dampingRatio = 0.35f, stiffness = Spring.StiffnessMediumLow))
+    }
+    // Waking up: the eyes open slowly.
+    LaunchedEffect(state.asleep) {
+        if (!state.asleep) { blink.snapTo(0.06f); blink.animateTo(1f, tween(520, easing = FastOutSlowInEasing)) }
+    }
+    // Always-running clocks: breathing, the z's, the connecting dot.
+    val clock = rememberInfiniteTransition(label = "face")
+    val breath by clock.animateFloat(0f, 1f, infiniteRepeatable(tween(4_200, easing = LinearEasing)), label = "breath")
+    val drift by clock.animateFloat(0f, 1f, infiniteRepeatable(tween(5_000, easing = LinearEasing)), label = "drift")
+    val sweep by clock.animateFloat(0f, 1f, infiniteRepeatable(tween(1_100, easing = LinearEasing)), label = "sweep")
+    val mic by animateFloatAsState(state.mic, tween(120), label = "mic")
+
     // Honeycomb grille, rebuilt only when the size changes (plain cache, not state).
     val mesh = remember { arrayOfNulls<Any>(2) }
 
@@ -259,15 +296,44 @@ fun NixieFace(state: FaceState, modifier: Modifier = Modifier.fillMaxSize()) {
             val p = swap.value
             val t = state.talk
             val f = (flicker.value + t * 0.25f).coerceAtMost(1.2f)
+            val wave = sin(breath * 2 * PI.toFloat())
+            val breathe = 1f + wave * if (state.asleep) 0.05f else 0.018f
+            val sink = if (state.asleep) wave * 3f else 0f
             for ((expr, a) in listOf(previous to (1f - p), shown to p)) {
                 if (a <= 0.01f) continue
                 for ((part, path) in SHAPES[expr]!!) {
                     val cx = if (part == Part.L) LX else RX
                     withTransform({
-                        translate(gx, gy)
-                        scale(1f + t * 0.06f, blink.value * (1f + t * 0.16f), pivot = Offset(cx, CY))
+                        translate(gx, gy + sink)
+                        scale((1f + t * 0.06f) * pop.value, blink.value * (1f + t * 0.16f) * pop.value * breathe, pivot = Offset(cx, CY))
                     }) { filament(path, a * f) }
                 }
+            }
+        }
+        withTransform({ translate(ox, oy); scale(s, s, pivot = Offset.Zero) }) {
+            // Asleep: three little z's drift up from his right eye.
+            if (state.asleep) for (i in 0..2) {
+                val q = (drift + i / 3f) % 1f
+                val x = 312f + q * 46f; val y = 74f - q * 52f; val z = 7f + q * 9f
+                val a = sin(q * PI.toFloat()) * 0.8f
+                val path = Path().apply { moveTo(x, y); lineTo(x + z, y); lineTo(x, y + z); lineTo(x + z, y + z) }
+                drawPath(path, Glow, alpha = 0.3f * a, style = Stroke(5f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                drawPath(path, Filament, alpha = a, style = Stroke(1.8f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+            }
+            // The strip under the eyes: a line that follows your voice, or a dot while connecting.
+            when (state.hud) {
+                Hud.LISTENING -> {
+                    val half = 12f + mic.coerceIn(0f, 1f) * 110f
+                    val a = 0.45f + mic.coerceIn(0f, 1f) * 0.55f
+                    drawLine(Glow, Offset(200f - half, 184f), Offset(200f + half, 184f), strokeWidth = 7f, cap = StrokeCap.Round, alpha = 0.22f * a)
+                    drawLine(Filament, Offset(200f - half, 184f), Offset(200f + half, 184f), strokeWidth = 2.4f, cap = StrokeCap.Round, alpha = a)
+                }
+                Hud.CONNECTING -> {
+                    val x = 170f + (if (sweep < 0.5f) sweep * 2 else 2 - sweep * 2) * 60f
+                    drawCircle(Glow, 6f, Offset(x, 184f), alpha = 0.3f)
+                    drawCircle(Filament, 2.6f, Offset(x, 184f))
+                }
+                Hud.NONE -> {}
             }
         }
         if (mesh[0] != size) { mesh[0] = size; mesh[1] = honeycomb(size.width / s, size.height / s) }

@@ -25,7 +25,6 @@ class Tracking(
     private var job: Job? = null
     private var lastSeen = 0L
     private var turning = false
-    private var head = LooiProtocol.HEAD_MIDDLE
     private var lastHeadCmd = 0L
     private var centred = true
 
@@ -50,9 +49,8 @@ class Tracking(
     }
 
     private fun headTo(pos: Int) {
-        head = pos.coerceIn(LooiProtocol.HEAD_UP, LooiProtocol.HEAD_DOWN)
         lastHeadCmd = System.currentTimeMillis()
-        val p = head
+        val p = pos.coerceIn(LooiProtocol.HEAD_UP, LooiProtocol.HEAD_DOWN)
         ble.launch { playScript(LooiProtocol.headTo(p, 6), "praćenje: glava $p", gesture = false) }
     }
 
@@ -60,7 +58,7 @@ class Tracking(
         val now = System.currentTimeMillis()
         val f = eyes.face.value?.takeIf { now - it.at < 500 }
         val canMove = bodyAllowed() && !ble.manualDrive && ble.state.value == ConnState.READY &&
-            now - ble.lastGestureAt > 3_000
+            now > ble.busyUntil + 500
 
         if (f == null) {
             stopTurning()
@@ -85,7 +83,7 @@ class Tracking(
         // Head: small steps toward the face, at most ~3 times a second.
         if (abs(f.y) > 0.22f && now - lastHeadCmd > 350) {
             centred = false
-            headTo(head + (f.y * 8).toInt())
+            headTo(ble.headPos + (f.y * 8).toInt())
         }
     }
 }

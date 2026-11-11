@@ -77,7 +77,7 @@ object LooiProtocol {
         val out = ArrayList<Byte>()
         // Keyframes in time order across channels, as the official app sends them.
         t.toList().chunked(3).filter { it.size == 3 }.sortedBy { it[0] }.forEach { (tick, v, c) ->
-            out += tick.toByte(); out += v.coerceIn(-127, 127).toByte(); out += c.toByte()
+            out += tick.coerceIn(0, 254).toByte(); out += v.coerceIn(-127, 127).toByte(); out += c.toByte()
         }
         t.toList().chunked(3).map { it[2] }.distinct().forEach { c -> out += 0xFF.toByte(); out += 0; out += c.toByte() }
         return out.toByteArray()

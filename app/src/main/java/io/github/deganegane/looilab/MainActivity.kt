@@ -43,6 +43,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var memory: Memory
     private lateinit var life: Life
     private lateinit var body: BodyLanguage
+    private lateinit var autonomy: Autonomy
+    private lateinit var reactions: Reactions
     private val face = FaceState()
 
     /** The phone's ambient light sensor (lux), for the lamp; -1 if the phone has none. */
@@ -104,7 +106,7 @@ class MainActivity : ComponentActivity() {
 
     /** Tap on the face: wake up and talk, or end the conversation. */
     private fun talk() {
-        life.wake()
+        life.wake(); autonomy.excite()
         if (brain.state.value != TalkState.OFF) brain.stop("· razgovor prekinut")
         else if (granted(Manifest.permission.RECORD_AUDIO)) brain.start()
         else askMic.launch(Manifest.permission.RECORD_AUDIO)
@@ -119,8 +121,8 @@ class MainActivity : ComponentActivity() {
         }
         face.flash(Expr.SURPRISED)
         eyes.takePhoto { f ->
-            if (f != null) { ble.note("··", "📷 Pictures/Stevo/$f"); face.flash(Expr.HAPPY) }
-            else ble.note("!!", "fotografija nije uspjela")
+            if (f != null) { ble.note("··", "📷 Pictures/Stevo/$f"); face.flash(Expr.HAPPY); face.say("Slika spremljena") }
+            else { ble.note("!!", "fotografija nije uspjela"); face.say("Slika nije uspjela") }
         }
     }
 
@@ -132,7 +134,7 @@ class MainActivity : ComponentActivity() {
         else { sel = "${MediaStore.Images.Media.DISPLAY_NAME} LIKE ?"; args = arrayOf("Stevo_%") }
         val id = contentResolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, proj, sel, args,
             "${MediaStore.Images.Media.DATE_ADDED} DESC")?.use { c -> if (c.moveToFirst()) c.getLong(0) else null }
-        if (id == null) { face.flash(Expr.CURIOUS); ble.note("··", "još nema fotografija"); return }
+        if (id == null) { face.flash(Expr.CURIOUS); face.say("Još nema fotografija"); return }
         val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
         runCatching { startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
     }
@@ -184,7 +186,16 @@ class MainActivity : ComponentActivity() {
             takePhoto = { done -> if (eyes.running) eyes.takePhoto(done) else done(null) },
             onIdle = { life.sleep() },
             onExpression = { body.onExpression(it) })
-        life = Life(face, ble, eyes, talking = { brain.state.value != TalkState.OFF })
+        life = Life(face, ble, eyes, talking = { brain.state.value != TalkState.OFF }, onWake = { autonomy.excite() })
+        reactions = Reactions(face) { block -> lifecycleScope.launch { block() } }
+        autonomy = Autonomy(ble, face, eyes, mode = { brain.autonomy },
+            free = { screen == Screen.FACE && !life.sleeping && brain.state.value == TalkState.OFF && !reactions.lifted })
+        autonomy.start(lifecycleScope)
+        val edge = EdgeReflex(ble, face) {
+            autonomy.edgeAt = System.currentTimeMillis()
+            face.say("Ups, rub stola!")
+            brain.notify("Your floor sensors: you just reached the edge of the table, stopped and rolled back. Do not go further that way.")
+        }
         body = BodyLanguage(ble, level = { brain.liveliness }, speaking = { brain.state.value == TalkState.SPEAKING }, asleep = { life.sleeping })
         body.start(lifecycleScope)
         eyes.rotation = displayRotation()
@@ -192,22 +203,25 @@ class MainActivity : ComponentActivity() {
             bodyAllowed = { screen == Screen.FACE && !life.sleeping })
         ble.onReady = { if (brain.lightMode == "on") setLight(true) }
 
-        val reactions = Reactions(face) { block -> lifecycleScope.launch { block() } }
         lifecycleScope.launch {
-            var lastEdgeNote = 0L
             ble.events.collect { e ->
                 val type = e.firstOrNull()?.toInt()
                 if (type == 0x0A && e.getOrNull(1)?.toInt() == 1) life.wake()
-                // Reached the edge while driving: stop, and let him say so.
-                val now = System.currentTimeMillis()
-                if (type == 0x01 && ble.atEdge && now - ble.lastGestureAt < 4_000 && now - lastEdgeNote > 5_000) {
-                    lastEdgeNote = now
-                    ble.launch { stopScript() }
-                    face.flash(Expr.WORRIED)
-                    brain.notify("Your floor sensors: you just reached the edge of the table and stopped. Do not go further that way.")
-                }
+                if (type == 0x01) edge.check()
                 if (!life.sleeping) reactions.on(e)
             }
+        }
+        // What happens shows up under the face.
+        lifecycleScope.launch {
+            var before = ble.state.value
+            ble.state.collect { st ->
+                if (st == ConnState.READY && before != ConnState.READY) face.say("Robot spojen")
+                if (st == ConnState.DISCONNECTED && before == ConnState.READY) face.say("Robot odspojen")
+                before = st
+            }
+        }
+        lifecycleScope.launch {
+            brain.transcript.collect { lines -> lines.lastOrNull()?.takeIf { it.startsWith("⚠") }?.let { face.say(it.take(90)) } }
         }
         life.start(lifecycleScope)
         // The lamp in "auto": on after a few seconds of darkness, off once the room is lit.
@@ -259,6 +273,7 @@ class MainActivity : ComponentActivity() {
                             onPhotos = { openPhotos() },
                             onSettings = { showScreen(Screen.SETTINGS) },
                             onConnect = { connect() },
+                            onTrick = { life.wake(); lifecycleScope.launch { autonomy.trick() } },
                         )
                         Screen.SETTINGS -> SettingsScreen(ble, brain, memory, SettingsActions(
                             onBack = { showScreen(Screen.FACE) },

@@ -18,6 +18,7 @@ class Life(
     private val ble: LooiBle,
     private val eyes: CameraEyes,
     private val talking: () -> Boolean,
+    private val onWake: () -> Unit = {},
 ) {
     var sleeping by mutableStateOf(false)
         private set
@@ -32,17 +33,18 @@ class Life(
         if (sleeping) return
         sleeping = true; sleptAt = System.currentTimeMillis()
         face.lookX = 0f; face.lookY = 0f
-        face.set(Expr.SLEEPY)
-        ble.launch { move(0, 0); playScript(LooiProtocol.headTo(100, 30), "spava: glava dolje", gesture = false) }
+        face.set(Expr.SLEEPY); face.asleep = true
+        ble.launch { move(0, 0); playScript(Moves.sleepDown(this), "spava: glava dolje") }
     }
 
     fun wake() {
         touched()
         if (!sleeping) return
-        sleeping = false
+        sleeping = false; face.asleep = false
         face.set(Expr.NEUTRAL)
         face.flash(Expr.HAPPY)
-        ble.launch { playScript(LooiProtocol.headTo(LooiProtocol.HEAD_MIDDLE, 14), "budi se: glava u sredinu", gesture = false) }
+        ble.launch { playScript(Moves.wakeUp(this), "budi se: glava u sredinu") }
+        onWake()
     }
 
     fun start(scope: CoroutineScope) = scope.launch {

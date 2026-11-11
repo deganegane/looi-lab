@@ -1,6 +1,9 @@
 package io.github.deganegane.looilab
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -14,6 +17,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -41,6 +45,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -93,10 +99,18 @@ fun HomeFace(
     onPhotos: () -> Unit,
     onSettings: () -> Unit,
     onConnect: () -> Unit,
+    onTrick: () -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
     val talk by brain.state.collectAsState()
     val robot by ble.state.collectAsState()
+    // The strip under the eyes follows the conversation.
+    LaunchedEffect(talk) {
+        face.hud = when (talk) { TalkState.CONNECTING -> Hud.CONNECTING; TalkState.LISTENING -> Hud.LISTENING; else -> Hud.NONE }
+    }
+    // Short messages fade out by themselves.
+    LaunchedEffect(face.messageId) { val id = face.messageId; if (face.message != null) { delay(3_200); face.clearMessage(id) } }
+    LaunchedEffect(Unit) { delay(1_200); if (face.message == null) face.say("Dodirni za razgovor · povuci gore za izbornik") }
     Box(Modifier.fillMaxSize()) {
         NixieFace(
             face,
@@ -116,16 +130,22 @@ fun HomeFace(
                     )
                 },
         )
-        // A small glowing dot while he listens or speaks.
-        if (talk != TalkState.OFF) {
-            Box(
-                Modifier.align(Alignment.TopEnd).padding(18.dp).size(10.dp)
-                    .background(if (talk == TalkState.SPEAKING) Amber else Amber.copy(alpha = 0.45f), CircleShape)
+        // Messages: what just happened, in his own glow.
+        AnimatedVisibility(
+            visible = face.message != null && !menu, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 22.dp),
+            enter = fadeIn(tween(250)) + slideInVertically(tween(250)) { it / 2 }, exit = fadeOut(tween(500)),
+        ) {
+            var shown by remember { mutableStateOf("") }
+            face.message?.let { shown = it }
+            Text(
+                shown, color = Amber, fontSize = 15.sp, letterSpacing = 0.5.sp,
+                modifier = Modifier.background(Color(0xCC120B07), RoundedCornerShape(50)).padding(horizontal = 18.dp, vertical = 8.dp),
             )
         }
         AnimatedVisibility(
             visible = menu, modifier = Modifier.align(Alignment.BottomCenter),
-            enter = slideInVertically { it } + fadeIn(), exit = slideOutVertically { it } + fadeOut(),
+            enter = slideInVertically(spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMediumLow)) { it } + fadeIn(),
+            exit = slideOutVertically(tween(200)) { it } + fadeOut(tween(200)),
         ) {
             Column(
                 Modifier.padding(16.dp).widthIn(max = 720.dp).fillMaxWidth()
@@ -145,7 +165,8 @@ fun HomeFace(
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                    MenuButton(if (talk == TalkState.OFF) "Razgovor" else "Kraj razgovora", Modifier.weight(1f)) { menu = false; onTalk() }
+                    MenuButton(if (talk == TalkState.OFF) "Razgovor" else "Kraj", Modifier.weight(1f)) { menu = false; onTalk() }
+                    MenuButton("Zaigraj", Modifier.weight(1f)) { menu = false; onTrick() }
                     MenuButton("Slikaj", Modifier.weight(1f)) { menu = false; onPhoto() }
                     MenuButton("Fotografije", Modifier.weight(1f)) { menu = false; onPhotos() }
                     MenuButton(if (life.sleeping) "Probudi" else "Spavaj", Modifier.weight(1f)) {
@@ -160,8 +181,8 @@ fun HomeFace(
 
 @Composable
 private fun MenuButton(label: String, modifier: Modifier, onClick: () -> Unit) {
-    Button(onClick = onClick, modifier = modifier.heightIn(min = 52.dp), shape = RoundedCornerShape(16.dp)) {
-        Text(label, fontSize = 14.sp, maxLines = 1)
+    Button(onClick = onClick, modifier = modifier.heightIn(min = 52.dp), shape = RoundedCornerShape(16.dp), contentPadding = PaddingValues(horizontal = 6.dp)) {
+        Text(label, fontSize = 13.sp, maxLines = 1, softWrap = false)
     }
 }
 
