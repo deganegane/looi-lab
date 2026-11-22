@@ -51,6 +51,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 import okhttp3.OkHttpClient
@@ -448,7 +449,13 @@ class LocalBrain(
         Other tags you can use when it fits: [photo] takes a photo, [light_on] and [light_off] switch your lamp,
         [remember: one short fact] saves something important about the person (their name first of all).
         Tags are acted on and never spoken. Example: [happy][nod] Naravno, baš sam dobro!
-    """.trimIndent() + "\n\n" + memory.promptSection(tools = false)
+    """.trimIndent() + (if (!brain.canSearch) "" else """
+
+        You can look things up on the internet. When the answer needs anything current or something you are not sure of
+        (weather, news, sports results, prices, opening hours, dates of events, facts about people or places), answer ONLY
+        with a feeling tag, a few words like "Čekaj, da provjerim." and the tag [search: short search query in the best language for it].
+        Then stop. You will get the results and answer properly. Never invent current facts.
+    """.trimIndent()) + "\n\n" + memory.promptSection(tools = false)
 
     fun start(useGroq: Boolean = false, useOllama: Boolean = false) {
         if (running) return
@@ -592,8 +599,16 @@ class LocalBrain(
 
     private val tagRe = Regex("\\[([^\\]]{1,120})]")
 
-    private fun answer(text: String) {
-        brain.log("ti: $text")
+    /** Set by a [search: …] tag while a reply is being written. */
+    @Volatile private var pendingSearch: String? = null
+
+    /**
+     * [text] is what the person said. [followUp], when set, is what the model gets instead:
+     * the search results with the question again.
+     */
+    private fun answer(text: String, followUp: String? = null) {
+        if (followUp == null) brain.log("ti: $text")
+        pendingSearch = null
         brain.publish(TalkState.CONNECTING) // the little dot: he is thinking
         face.flash(Expr.THINKING); onExpression(Expr.THINKING)
         generating = true
@@ -612,16 +627,17 @@ class LocalBrain(
             }
             runCatching {
                 var image: ByteArray? = null
-                if (ollama && wantsToSee(text)) {
+                if (ollama && followUp == null && wantsToSee(text)) {
                     image = frameNow()
                     if (image != null) { face.flash(Expr.CURIOUS); brain.log("👁 gleda (${brain.ollamaVisionModel})") }
                     else brain.log("· kamera nije upaljena (Postavke → Kamera: \"Stevo vidi\" ili praćenje lica)")
                 }
+                val input = followUp ?: text
                 val chunks: Flow<String> =
-                    if (ollama) ollamaStream(text, image)
-                    else if (groq) groqStream(text)
-                    else if (nanoMode) nano.generateContentStream(nanoPrompt(text)).map { it.candidates.firstOrNull()?.text ?: "" }
-                    else conversation!!.sendMessageAsync(text).map { it.toString() }
+                    if (ollama) ollamaStream(input, image)
+                    else if (groq) groqStream(input)
+                    else if (nanoMode) nano.generateContentStream(nanoPrompt(input)).map { it.candidates.firstOrNull()?.text ?: "" }
+                    else conversation!!.sendMessageAsync(input).map { it.toString() }
                 chunks.collect { chunk ->
                     // Some versions send the whole text so far, others only what is new.
                     if (all.isNotEmpty() && chunk.startsWith(all)) { all.setLength(0); all.append(chunk) } else all.append(chunk)
@@ -640,6 +656,21 @@ class LocalBrain(
                 }
             }
             if (running) flush(true)
+            val query = pendingSearch?.takeIf { followUp == null }
+            pendingSearch = null
+            if (query != null && running) {
+                brain.log("🔎 $query")
+                face.flash(Expr.CURIOUS); onExpression(Expr.CURIOUS)
+                val found = withContext(Dispatchers.IO) { Search.run(brain, query) }
+                if (!running) { generating = false; return@launch }
+                val next = if (found.text != null)
+                    "Search results for \"$query\" (${found.source}):\n${found.text}\n\n" +
+                        "Using these results, answer what I asked: \"$text\". Speak naturally, in one to three short sentences, no links, no [search] tag."
+                else "The internet search did not work (${found.source}). Tell me briefly that you could not check it right now, and answer \"$text\" only if you know it for sure. No [search] tag."
+                if (found.text == null) brain.log("· pretraga nije uspjela: ${found.source}")
+                answer(text, next)
+                return@launch
+            }
             generating = false
             if (said.isNotBlank()) { brain.log("${brain.name}: ${said.toString().trim()}"); history += text to said.toString().trim() }
             if (running && speaking.get() == 0) listen()
@@ -655,6 +686,7 @@ class LocalBrain(
             t == "photo" -> { face.flash(Expr.SURPRISED); takePhoto { f -> if (f != null) { brain.log("📷 $f"); face.say("Slika spremljena") } } }
             t == "light_on" -> ble.launch { setLight(true) }
             t == "light_off" -> ble.launch { setLight(false) }
+            t.startsWith("search") -> tag.substringAfter(':', "").trim().takeIf { it.length > 1 && brain.canSearch }?.let { pendingSearch = it }
             t.startsWith("remember") -> tag.substringAfter(':', "").trim().takeIf { it.length > 2 }?.let {
                 if (memory.remember(it) == "saved") brain.log("🧠 $it")
             }

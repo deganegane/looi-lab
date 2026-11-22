@@ -267,6 +267,15 @@ class StevoBrain(
         get() = prefs.getString("ollamaVision", "gemma4:26b")?.takeIf { it.isNotBlank() } ?: "gemma4:26b"
         set(v) = prefs.edit().putString("ollamaVision", v.trim()).apply()
 
+    /** Internet search for the brains without their own: SearXNG on the EVO-X2, then Tavily. */
+    var searxUrl: String
+        get() = prefs.getString("searxUrl", "http://100.70.141.124:8080") ?: "http://100.70.141.124:8080"
+        set(v) = prefs.edit().putString("searxUrl", v.trim()).apply()
+    var tavilyKey: String
+        get() = prefs.getString("tavilyKey", "") ?: ""
+        set(v) = prefs.edit().putString("tavilyKey", v.trim()).apply()
+    val canSearch: Boolean get() = searxUrl.isNotBlank() || tavilyKey.isNotBlank()
+
     /** "gemini", "groq", "ollama" (the EVO-X2), "local" (a model on the phone) or "auto" (Gemini, then the EVO-X2, Groq, the phone). */
     var brainMode: String
         get() = prefs.getString("brain", "auto") ?: "auto"

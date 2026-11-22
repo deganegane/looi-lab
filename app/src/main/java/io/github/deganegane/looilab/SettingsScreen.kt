@@ -558,6 +558,34 @@ private fun GeminiPage(brain: StevoBrain, local: LocalBrain, a: SettingsActions)
         if (evoState.isNotEmpty()) Text(evoState, style = MaterialTheme.typography.bodySmall)
         Hint("Sluša prepoznavanje govora mobitela, govori glasom mobitela. Kad ga pitaš \"što vidiš\" ili \"pogledaj ovo\", šalje sliku s kamere modelu za gledanje (kamera mora biti upaljena).")
     }
+    var searx by remember { mutableStateOf(brain.searxUrl) }
+    var tavily by remember { mutableStateOf(brain.tavilyKey) }
+    var tavilySaved by remember { mutableStateOf(brain.tavilyKey.isNotBlank()) }
+    var searchState by remember { mutableStateOf("") }
+    AppCard {
+        CardTitle("Internet (pretraga)")
+        Hint("Za EVO-X2, Groq i model na mobitelu: kad treba nešto aktualno (vrijeme, vijesti, rezultati…), Stevo to potraži. Prvo SearXNG na EVO-X2, a ako ne odgovara, Tavily. Gemini ima svoje Google pretraživanje.")
+        OutlinedTextField(searx, { searx = it; brain.searxUrl = it; searchState = "" }, singleLine = true, label = { Text("SearXNG adresa") },
+            placeholder = { Text("http://100.70.141.124:8080") }, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(
+            tavily, { tavily = it; tavilySaved = false }, singleLine = true, label = { Text("Tavily ključ") }, placeholder = { Text("tvly-…") },
+            visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            FilledTonalButton(onClick = { brain.tavilyKey = tavily; tavilySaved = tavily.isNotBlank() }) { Text("Spremi") }
+            OutlinedButton(onClick = {
+                brain.tavilyKey = tavily; tavilySaved = tavily.isNotBlank()
+                searchState = "Tražim…"
+                scope.launch {
+                    val f = withContext(Dispatchers.IO) { Search.run(brain, "vremenska prognoza Čakovec") }
+                    searchState = if (f.text != null) "✓ Radi (${f.source}):\n${f.text.take(220)}…" else "✗ Ne radi: ${f.source}"
+                }
+            }) { Text("Isprobaj") }
+            if (tavilySaved) Text("✓", color = MaterialTheme.colorScheme.primary)
+        }
+        if (searchState.isNotEmpty()) Text(searchState, style = MaterialTheme.typography.bodySmall)
+        Hint("Tavily: besplatan ključ na app.tavily.com, 1.000 pretraga mjesečno, bez kartice.")
+    }
     var groqKey by remember { mutableStateOf(brain.groqKey) }
     var groqSaved by remember { mutableStateOf(brain.groqKey.isNotBlank()) }
     var groqModel by remember { mutableStateOf(brain.groqModel) }
