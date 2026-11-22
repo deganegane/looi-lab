@@ -257,7 +257,7 @@ class StevoBrain(
 
     /** Ollama on the EVO-X2 at home: big models, free, no quota, needs the home Wi-Fi. */
     var ollamaUrl: String
-        get() = prefs.getString("ollamaUrl", "http://192.168.18.81:11434")?.takeIf { it.isNotBlank() } ?: "http://192.168.18.81:11434"
+        get() = prefs.getString("ollamaUrl", "http://100.70.141.124:11434")?.takeIf { it.isNotBlank() } ?: "http://100.70.141.124:11434"
         set(v) = prefs.edit().putString("ollamaUrl", v.trim()).apply()
     var ollamaModel: String
         get() = prefs.getString("ollamaModel", "gemma4:e4b")?.takeIf { it.isNotBlank() } ?: "gemma4:e4b"

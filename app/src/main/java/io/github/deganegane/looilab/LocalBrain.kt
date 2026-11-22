@@ -633,7 +633,7 @@ class LocalBrain(
                     if (groq && why.startsWith("⚠")) { generating = false; main.post { stop(why) }; return@launch }
                     if (ollama) {
                         generating = false
-                        val msg = if (why.startsWith("⚠")) why else "⚠ EVO-X2 se ne javlja (${why.take(60)}). Je li upaljen i jesi li na kućnom Wi-Fi-ju?"
+                        val msg = if (why.startsWith("⚠")) why else "⚠ EVO-X2 se ne javlja (${why.take(60)}). Je li upaljen i je li Tailscale uključen na mobitelu?"
                         main.post { stop(msg) }; return@launch
                     }
                     brain.log("⚠ Model: ${why.take(100)}")
