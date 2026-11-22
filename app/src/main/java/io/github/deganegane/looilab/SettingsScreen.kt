@@ -558,6 +558,22 @@ private fun GeminiPage(brain: StevoBrain, local: LocalBrain, a: SettingsActions)
         if (evoState.isNotEmpty()) Text(evoState, style = MaterialTheme.typography.bodySmall)
         Hint("Sluša prepoznavanje govora mobitela, govori glasom mobitela. Kad ga pitaš \"što vidiš\" ili \"pogledaj ovo\", šalje sliku s kamere modelu za gledanje (kamera mora biti upaljena).")
     }
+    var evoVoice by remember { mutableStateOf(brain.evoVoice) }
+    var voiceUrl by remember { mutableStateOf(brain.voiceUrl) }
+    var voiceState by remember { mutableStateOf("") }
+    AppCard {
+        SwitchRow("Glas s EVO-X2", "Ljepši glas (OmniVoice) za EVO-X2, Groq i model na mobitelu. Kad EVO-X2 ne odgovara, govori glasom mobitela.", evoVoice) {
+            evoVoice = it; brain.evoVoice = it
+        }
+        if (evoVoice) {
+            OutlinedTextField(voiceUrl, { voiceUrl = it; brain.voiceUrl = it; voiceState = "" }, singleLine = true, label = { Text("Adresa glasa") },
+                placeholder = { Text("http://100.70.141.124:8002") }, modifier = Modifier.fillMaxWidth())
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedButton(onClick = { voiceState = "Stvaram rečenicu…"; local.testEvoVoice { voiceState = it } }) { Text("Isprobaj glas") }
+            }
+            if (voiceState.isNotEmpty()) Text(voiceState, style = MaterialTheme.typography.bodySmall)
+        }
+    }
     var searx by remember { mutableStateOf(brain.searxUrl) }
     var tavily by remember { mutableStateOf(brain.tavilyKey) }
     var tavilySaved by remember { mutableStateOf(brain.tavilyKey.isNotBlank()) }

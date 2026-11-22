@@ -2,7 +2,9 @@ package io.github.deganegane.looilab
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.media.AudioAttributes
 import android.media.AudioFormat
+import android.media.AudioTrack
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.content.Intent
@@ -43,6 +45,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -463,7 +468,7 @@ class LocalBrain(
         ollama = useOllama
         if (groq && brain.groqKey.isBlank()) { brain.log("⚠ Upiši Groq ključ (Postavke → Mozak)."); face.say("Upiši Groq ključ u Postavkama"); return }
         if (!groq && !ollama && !ready) { brain.log("⚠ Model na mobitelu nije spreman (Postavke → Mozak)."); face.say("Model na mobitelu nije spreman"); return }
-        running = true; errorsInRow = 0; lastHeard = System.currentTimeMillis()
+        running = true; errorsInRow = 0; lastHeard = System.currentTimeMillis(); evoVoiceOff = false
         history.clear()
         brain.beginExternal()
         brain.log(if (ollama) "· ${brain.name} razmišlja na EVO-X2 (${brain.ollamaModel}, za gledanje ${brain.ollamaVisionModel})"
@@ -519,7 +524,7 @@ class LocalBrain(
         if (!running) return
         running = false
         main.post { runCatching { recognizer?.cancel(); recognizer?.destroy() }; recognizer = null }
-        runCatching { tts?.stop() }; speaking.set(0); generating = false
+        runCatching { tts?.stop() }; stopEvoVoice(); speaking.set(0); generating = false
         main.postDelayed({ hush(false) }, 400) // after the recognizer's last chime
         val job = thinking
         if (groq || ollama || nanoMode) job?.cancel()
@@ -694,17 +699,125 @@ class LocalBrain(
     }
 
     private fun say(text: String) {
+        val evo = useEvoVoice
         val t = tts
-        if (t == null || !ttsReady) return
+        if (!evo && (t == null || !ttsReady)) return
         if (speaking.getAndIncrement() == 0) {
             hush(false)
             brain.publish(TalkState.SPEAKING)
-            runCatching { t.setLanguage(Locale.forLanguageTag(languageTag())) }
-            t.setSpeechRate(brain.speed); t.setPitch(brain.pitch)
-            // No sound level from the phone's voice, so the eyes pulse to a made-up rhythm.
+            if (t != null && ttsReady) {
+                runCatching { t.setLanguage(Locale.forLanguageTag(languageTag())) }
+                t.setSpeechRate(brain.speed); t.setPitch(brain.pitch)
+            }
+            // No sound level from the voice, so the eyes pulse to a made-up rhythm.
             io.launch { while (speaking.get() > 0 && running) { face.talk = 0.25f + Random.nextFloat() * 0.5f; delay(90) }; face.talk = 0f }
         }
+        if (evo) {
+            // Sentences are made on the EVO-X2 while the one before is still playing, and played in order.
+            ensurePlayer()
+            voiceQueue.trySend(text to io.async { fetchVoice(text) })
+        } else t!!.speak(text, TextToSpeech.QUEUE_ADD, null, "s${System.nanoTime()}")
+    }
+
+    /** One sentence with the phone's voice, for a sentence already counted in [speaking]. */
+    private fun sayOnPhone(text: String) {
+        val t = tts
+        if (t == null || !ttsReady) { spoken(); return }
+        runCatching { t.setLanguage(Locale.forLanguageTag(languageTag())) }
+        t.setSpeechRate(brain.speed); t.setPitch(brain.pitch)
         t.speak(text, TextToSpeech.QUEUE_ADD, null, "s${System.nanoTime()}")
+    }
+
+    // ------------------------------------------------------------------ the voice on the EVO-X2 (OmniVoice)
+
+    /** Set when the EVO-X2 voice failed in this conversation: the phone speaks until the next one. */
+    @Volatile private var evoVoiceOff = false
+    private val useEvoVoice: Boolean get() = brain.evoVoice && brain.voiceUrl.isNotBlank() && !evoVoiceOff
+    private var voiceQueue = Channel<Pair<String, Deferred<ByteArray?>>>(Channel.UNLIMITED)
+    private var player: Job? = null
+    @Volatile private var track: AudioTrack? = null
+    private val voiceHttp by lazy { OkHttpClient.Builder().connectTimeout(3, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).build() }
+
+    private fun voiceBase(): String {
+        var u = brain.voiceUrl.trim().trimEnd('/')
+        if (!u.startsWith("http://") && !u.startsWith("https://")) u = "http://$u"
+        if (!u.substringAfter("://").contains(':')) u = "$u:8002"
+        return u
+    }
+
+    /** The sentence as a WAV from the EVO-X2, or null. Blocks. */
+    private fun fetchVoice(text: String): ByteArray? = runCatching {
+        val body = JSONObject().put("text", text).put("speed", brain.speed.toDouble()).toString().toRequestBody("application/json".toMediaType())
+        voiceHttp.newCall(Request.Builder().url("${voiceBase()}/tts").post(body).build()).execute().use { r ->
+            if (r.isSuccessful) r.body?.bytes() else null
+        }
+    }.getOrNull()
+
+    private fun ensurePlayer() {
+        if (player?.isActive == true) return
+        val queue = voiceQueue
+        player = io.launch {
+            for ((text, wav) in queue) {
+                val bytes = wav.await()
+                if (!running) { spoken(); continue }
+                if (bytes == null) {
+                    if (!evoVoiceOff) brain.log("· glas s EVO-X2 ne odgovara, govorim glasom mobitela")
+                    evoVoiceOff = true
+                    sayOnPhone(text)
+                    continue
+                }
+                playWav(bytes) { running }
+                spoken()
+            }
+        }
+    }
+
+    private fun stopEvoVoice() {
+        voiceQueue.cancel(); voiceQueue = Channel(Channel.UNLIMITED)
+        player?.cancel(); player = null
+        track?.let { runCatching { it.pause(); it.flush() } }
+    }
+
+    /** Plays a PCM16 WAV to the end (or until [keepGoing] turns false). Blocks. */
+    private fun playWav(wav: ByteArray, keepGoing: () -> Boolean) {
+        val bb = ByteBuffer.wrap(wav).order(ByteOrder.LITTLE_ENDIAN)
+        var rate = 24_000; var channels = 1; var pos = 12; var dataOff = -1; var dataLen = 0
+        while (pos + 8 <= wav.size) {
+            val id = String(wav, pos, 4, Charsets.US_ASCII); val len = bb.getInt(pos + 4)
+            if (id == "fmt ") { channels = bb.getShort(pos + 10).toInt(); rate = bb.getInt(pos + 12) }
+            if (id == "data") { dataOff = pos + 8; dataLen = minOf(len, wav.size - dataOff); break }
+            pos += 8 + len + (len and 1)
+        }
+        if (dataOff < 0 || dataLen <= 0) return
+        val mask = if (channels == 2) AudioFormat.CHANNEL_OUT_STEREO else AudioFormat.CHANNEL_OUT_MONO
+        val min = AudioTrack.getMinBufferSize(rate, mask, AudioFormat.ENCODING_PCM_16BIT)
+        val at = AudioTrack.Builder()
+            .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            .setAudioFormat(AudioFormat.Builder().setSampleRate(rate).setChannelMask(mask).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
+            .setBufferSizeInBytes(maxOf(min, 16_384)).setTransferMode(AudioTrack.MODE_STREAM).build()
+        track = at
+        try {
+            at.play()
+            var off = dataOff; val end = dataOff + dataLen
+            while (off < end && keepGoing()) { val n = at.write(wav, off, minOf(16_384, end - off)); if (n <= 0) break; off += n }
+            val frames = dataLen / (2 * channels)
+            val deadline = System.currentTimeMillis() + 4_000
+            while (keepGoing() && at.playbackHeadPosition < frames && System.currentTimeMillis() < deadline) Thread.sleep(20)
+        } finally {
+            runCatching { at.stop() }; at.release(); if (track === at) track = null
+        }
+    }
+
+    /** For the settings page: says a test sentence with the EVO-X2 voice. */
+    fun testEvoVoice(done: (String) -> Unit) {
+        io.launch {
+            val t0 = System.currentTimeMillis()
+            val wav = fetchVoice("Bok! Ja sam ${brain.name}. Ovako zvučim s tvog EVO-X2.")
+            if (wav == null) { main.post { done("✗ Glas s EVO-X2 se ne javlja (${voiceBase()}). Radi li stevo-voice u Dockeru?") }; return@launch }
+            val took = (System.currentTimeMillis() - t0) / 1000.0
+            main.post { done("✓ Radi. Rečenica gotova za %.1f s.".format(took)) }
+            playWav(wav) { true }
+        }
     }
 
     private fun spoken() {

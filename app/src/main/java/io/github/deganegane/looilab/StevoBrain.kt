@@ -267,6 +267,14 @@ class StevoBrain(
         get() = prefs.getString("ollamaVision", "gemma4:26b")?.takeIf { it.isNotBlank() } ?: "gemma4:26b"
         set(v) = prefs.edit().putString("ollamaVision", v.trim()).apply()
 
+    /** Stevo's voice made on the EVO-X2 (OmniVoice) instead of the phone's, for the brains that use the phone's voice. */
+    var evoVoice: Boolean
+        get() = prefs.getBoolean("evoVoice", true)
+        set(v) = prefs.edit().putBoolean("evoVoice", v).apply()
+    var voiceUrl: String
+        get() = prefs.getString("voiceUrl", "http://100.70.141.124:8002") ?: "http://100.70.141.124:8002"
+        set(v) = prefs.edit().putString("voiceUrl", v.trim()).apply()
+
     /** Internet search for the brains without their own: SearXNG on the EVO-X2, then Tavily. */
     var searxUrl: String
         get() = prefs.getString("searxUrl", "http://100.70.141.124:8080") ?: "http://100.70.141.124:8080"
