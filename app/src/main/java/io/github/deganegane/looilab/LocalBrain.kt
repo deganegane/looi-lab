@@ -736,7 +736,10 @@ class LocalBrain(
     private var voiceQueue = Channel<Pair<String, Deferred<ByteArray?>>>(Channel.UNLIMITED)
     private var player: Job? = null
     @Volatile private var track: AudioTrack? = null
-    private val voiceHttp by lazy { OkHttpClient.Builder().connectTimeout(3, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).build() }
+    // A voice that comes later than this is worse than the phone's voice: he would just stand there silent.
+    private val voiceHttp by lazy { OkHttpClient.Builder().connectTimeout(3, TimeUnit.SECONDS).readTimeout(8, TimeUnit.SECONDS).callTimeout(10, TimeUnit.SECONDS).build() }
+    /** The test button may wait longer, to show how slow the voice really is. */
+    private val voiceTestHttp by lazy { OkHttpClient.Builder().connectTimeout(3, TimeUnit.SECONDS).readTimeout(120, TimeUnit.SECONDS).build() }
 
     private fun voiceBase(): String {
         var u = brain.voiceUrl.trim().trimEnd('/')
@@ -746,9 +749,9 @@ class LocalBrain(
     }
 
     /** The sentence as a WAV from the EVO-X2, or null. Blocks. */
-    private fun fetchVoice(text: String): ByteArray? = runCatching {
+    private fun fetchVoice(text: String, http: OkHttpClient = voiceHttp): ByteArray? = runCatching {
         val body = JSONObject().put("text", text).put("speed", brain.speed.toDouble()).toString().toRequestBody("application/json".toMediaType())
-        voiceHttp.newCall(Request.Builder().url("${voiceBase()}/tts").post(body).build()).execute().use { r ->
+        http.newCall(Request.Builder().url("${voiceBase()}/tts").post(body).build()).execute().use { r ->
             if (r.isSuccessful) r.body?.bytes() else null
         }
     }.getOrNull()
@@ -812,10 +815,13 @@ class LocalBrain(
     fun testEvoVoice(done: (String) -> Unit) {
         io.launch {
             val t0 = System.currentTimeMillis()
-            val wav = fetchVoice("Bok! Ja sam ${brain.name}. Ovako zvučim s tvog EVO-X2.")
-            if (wav == null) { main.post { done("✗ Glas s EVO-X2 se ne javlja (${voiceBase()}). Radi li stevo-voice u Dockeru?") }; return@launch }
+            val wav = fetchVoice("Bok! Ja sam ${brain.name}. Ovako zvučim s tvog EVO-X2.", voiceTestHttp)
             val took = (System.currentTimeMillis() - t0) / 1000.0
-            main.post { done("✓ Radi. Rečenica gotova za %.1f s.".format(took)) }
+            if (wav == null) { main.post { done("✗ Glas s EVO-X2 se ne javlja (${voiceBase()}) nakon %.0f s. Radi li stevo-voice u Dockeru i je li otvoren port 8002?".format(took)) }; return@launch }
+            main.post {
+                done("✓ Radi. Rečenica gotova za %.1f s.".format(took) +
+                    if (took > 6) " To je presporo za razgovor (Stevo čeka najviše 8 s, pa govori glasom mobitela)." else "")
+            }
             playWav(wav) { true }
         }
     }
