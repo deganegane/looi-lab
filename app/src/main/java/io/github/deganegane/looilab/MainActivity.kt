@@ -30,7 +30,9 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 
 enum class Screen { FACE, SETTINGS, DIAGNOSTICS }
@@ -116,12 +118,32 @@ class MainActivity : ComponentActivity() {
         else askMic.launch(Manifest.permission.RECORD_AUDIO)
     }
 
-    /** Gemini, the model on the phone, or Gemini with the phone as the fallback. */
+    /** Gemini, the EVO-X2, Groq, the model on the phone, or Gemini with the others as fallbacks. */
     private fun startBrain() {
         when (brain.brainMode) {
+            "ollama" -> startOllama(viaGemini = false)
             "groq" -> local.start(useGroq = true)
             "local" -> if (local.ready) local.start() else face.say("Model nije spreman: Postavke → Mozak")
             else -> brain.start()
+        }
+    }
+
+    /** The EVO-X2 if it answers; otherwise Groq, then the model on the phone. */
+    private var checkingEvo = false
+    private fun startOllama(viaGemini: Boolean) {
+        if (checkingEvo) return
+        checkingEvo = true
+        face.flash(Expr.THINKING)
+        lifecycleScope.launch {
+            val models = withContext(Dispatchers.IO) { local.ollamaModels() }
+            checkingEvo = false
+            val why = if (viaGemini) "Gemini nije dostupan" else "EVO-X2 se ne javlja"
+            when {
+                models != null -> { if (viaGemini) face.say("Gemini nije dostupan, razmišljam na EVO-X2"); local.start(useOllama = true) }
+                brain.groqKey.isNotBlank() -> { face.say("$why, prelazim na Groq"); local.start(useGroq = true) }
+                local.ready -> { face.say("$why, razmišljam sam"); local.start() }
+                else -> face.say("EVO-X2 se ne javlja")
+            }
         }
     }
 
@@ -201,12 +223,14 @@ class MainActivity : ComponentActivity() {
             onExpression = { body.onExpression(it) })
         local = LocalBrain(applicationContext, brain, face, ble, memory,
             takePhoto = { done -> if (eyes.running) eyes.takePhoto(done) else done(null) },
+            grabFrame = { done -> if (eyes.running) eyes.grabFrame(done) else done(null) },
             onIdle = { life.sleep() },
             onExpression = { body.onExpression(it) })
         // Gemini out of quota, offline or without a key: the phone's own model takes over.
         brain.onFailed = {
             if (brain.brainMode == "auto") runOnUiThread {
-                if (brain.groqKey.isNotBlank()) { face.say("Gemini nije dostupan, prelazim na Groq"); local.start(useGroq = true) }
+                if (brain.ollamaUrl.isNotBlank()) startOllama(viaGemini = true)
+                else if (brain.groqKey.isNotBlank()) { face.say("Gemini nije dostupan, prelazim na Groq"); local.start(useGroq = true) }
                 else if (local.ready) { face.say("Gemini nije dostupan, razmišljam sam"); local.start() }
             }
         }

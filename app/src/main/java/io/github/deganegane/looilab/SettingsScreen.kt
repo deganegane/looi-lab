@@ -69,6 +69,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -80,6 +81,9 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -499,8 +503,9 @@ private fun CameraPage(brain: StevoBrain, a: SettingsActions) {
     }
 }
 
-private val BRAIN_MODES = listOf("gemini" to "Gemini", "groq" to "Groq", "local" to "Mobitel", "auto" to "Auto")
+private val BRAIN_MODES = listOf("ollama" to "EVO-X2", "gemini" to "Gemini", "groq" to "Groq", "local" to "Mobitel", "auto" to "Auto")
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun GeminiPage(brain: StevoBrain, local: LocalBrain, a: SettingsActions) {
     var key by remember { mutableStateOf(brain.apiKey) }
@@ -509,15 +514,49 @@ private fun GeminiPage(brain: StevoBrain, local: LocalBrain, a: SettingsActions)
     val model by local.model.collectAsState()
     AppCard {
         CardTitle("Tko razmišlja")
-        Segments(BRAIN_MODES, mode) { mode = it; brain.brainMode = it }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            BRAIN_MODES.forEach { (value, label) ->
+                FilterChip(selected = mode == value, onClick = { mode = value; brain.brainMode = value }, label = { Text(label) })
+            }
+        }
         Hint(
             when (mode) {
+                "ollama" -> "Veliki modeli na tvom EVO-X2: besplatno, bez kvote, dobar hrvatski. Radi na kućnom Wi-Fi-ju; kad EVO-X2 ne odgovara, prelazi na Groq ili model na mobitelu."
                 "gemini" -> "Gemini Live: najprirodniji glas i najpametniji, ali treba internet i ima kvotu."
                 "groq" -> "Veliki otvoreni model preko Groqa: besplatno, pametno, dobar hrvatski. Govori glasom mobitela."
                 "local" -> "Model na samom mobitelu: besplatno i bez kvote. Sporiji, ravniji glas, manje pametan."
-                else -> "Gemini dok radi; kad nema kvote, prelazi na Groq (ako ima ključ), a bez interneta na model na mobitelu."
+                else -> "Gemini dok radi; kad nema kvote, prelazi na EVO-X2, pa na Groq (ako ima ključ), a bez interneta na model na mobitelu."
             }
         )
+    }
+    var evoUrl by remember { mutableStateOf(brain.ollamaUrl) }
+    var evoModel by remember { mutableStateOf(brain.ollamaModel) }
+    var evoVision by remember { mutableStateOf(brain.ollamaVisionModel) }
+    var evoState by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+    AppCard {
+        CardTitle("EVO-X2 (Ollama)")
+        OutlinedTextField(evoUrl, { evoUrl = it; brain.ollamaUrl = it; evoState = "" }, singleLine = true, label = { Text("Adresa") },
+            placeholder = { Text("http://192.168.18.81:11434") }, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(evoModel, { evoModel = it; brain.ollamaModel = it }, singleLine = true, label = { Text("Model za razgovor") }, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(evoVision, { evoVision = it; brain.ollamaVisionModel = it }, singleLine = true, label = { Text("Model za gledanje") }, modifier = Modifier.fillMaxWidth())
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            FilledTonalButton(onClick = {
+                evoState = "Provjeravam…"
+                scope.launch {
+                    val models = withContext(Dispatchers.IO) { local.ollamaModels() }
+                    evoState = when {
+                        models == null -> "✗ EVO-X2 se ne javlja. Je li upaljen, je li Ollama pokrenuta i jesi li na kućnom Wi-Fi-ju?"
+                        else -> {
+                            val missing = listOf(brain.ollamaModel, brain.ollamaVisionModel).filter { m -> models.none { it == m || it == "$m:latest" } }
+                            "✓ Spojen. Modeli: ${models.joinToString(", ")}" + if (missing.isNotEmpty()) "\n⚠ Nema: ${missing.joinToString(", ")}" else ""
+                        }
+                    }
+                }
+            }) { Text("Provjeri vezu") }
+        }
+        if (evoState.isNotEmpty()) Text(evoState, style = MaterialTheme.typography.bodySmall)
+        Hint("Sluša prepoznavanje govora mobitela, govori glasom mobitela. Kad ga pitaš \"što vidiš\" ili \"pogledaj ovo\", šalje sliku s kamere modelu za gledanje (kamera mora biti upaljena).")
     }
     var groqKey by remember { mutableStateOf(brain.groqKey) }
     var groqSaved by remember { mutableStateOf(brain.groqKey.isNotBlank()) }

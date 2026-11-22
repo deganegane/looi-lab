@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Base64
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -49,6 +50,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -77,6 +81,8 @@ class LocalBrain(
     private val ble: LooiBle,
     private val memory: Memory,
     private val takePhoto: ((String?) -> Unit) -> Unit,
+    /** One small JPEG of what the camera sees now, or null when the camera is off. */
+    private val grabFrame: ((ByteArray?) -> Unit) -> Unit,
     private val onIdle: () -> Unit,
     private val onExpression: (Expr) -> Unit,
 ) {
@@ -238,6 +244,84 @@ class LocalBrain(
         }
     }.flowOn(Dispatchers.IO)
 
+    // ------------------------------------------------------------------ Ollama on the EVO-X2 (home)
+    // The phone hears (speech recognition), a big model on the EVO-X2 thinks, the phone speaks.
+    // When he is asked to look at something, a camera frame goes to the vision model.
+
+    /** True while this conversation runs on the EVO-X2. */
+    @Volatile private var ollama = false
+    private val ollamaHttp by lazy {
+        OkHttpClient.Builder().connectTimeout(4, TimeUnit.SECONDS).readTimeout(180, TimeUnit.SECONDS).build()
+    }
+    private val quickHttp by lazy {
+        OkHttpClient.Builder().connectTimeout(2, TimeUnit.SECONDS).readTimeout(3, TimeUnit.SECONDS).build()
+    }
+
+    /** "192.168.18.81" → "http://192.168.18.81:11434". */
+    private fun ollamaBase(): String {
+        var u = brain.ollamaUrl.trim().trimEnd('/')
+        if (!u.startsWith("http://") && !u.startsWith("https://")) u = "http://$u"
+        val host = u.substringAfter("://")
+        if (!host.contains(':')) u = "$u:11434"
+        return u
+    }
+
+    /** The models on the EVO-X2, or null when it does not answer. Blocks for a few seconds at most. */
+    fun ollamaModels(): List<String>? = runCatching {
+        quickHttp.newCall(Request.Builder().url("${ollamaBase()}/api/tags").build()).execute().use { r ->
+            if (!r.isSuccessful) return null
+            val arr = JSONObject(r.body?.string().orEmpty()).optJSONArray("models") ?: JSONArray()
+            (0 until arr.length()).map { arr.getJSONObject(it).optString("name") }
+        }
+    }.getOrNull()
+
+    private val lookWords = listOf(
+        "vidiš", "vidis", "vidi li", "vidi ovo", "pogledaj", "pogledati", "pogle", "što je ovo", "sto je ovo",
+        "što držim", "sto drzim", "u ruci", "kako izgledam", "što nosim", "sto nosim", "koja je ovo", "koji je ovo",
+        "can you see", "look at", "what is this", "what am i holding", "siehst du", "schau",
+    )
+    private fun wantsToSee(text: String) = text.lowercase().let { t -> lookWords.any { t.contains(it) } }
+
+    private suspend fun frameNow(): ByteArray? = withTimeoutOrNull(2_500) {
+        suspendCancellableCoroutine { c -> grabFrame { jpg -> if (c.isActive) c.resume(jpg) } }
+    }
+
+    /** The reply from the EVO-X2, streamed token by token. */
+    private fun ollamaStream(text: String, image: ByteArray?): Flow<String> = flow {
+        val messages = JSONArray().put(JSONObject().put("role", "system").put("content", persona()))
+        history.takeLast(16).forEach { (u, a) ->
+            messages.put(JSONObject().put("role", "user").put("content", u)); messages.put(JSONObject().put("role", "assistant").put("content", a))
+        }
+        val user = JSONObject().put("role", "user").put("content", text)
+        if (image != null) user.put("images", JSONArray().put(Base64.encodeToString(image, Base64.NO_WRAP)))
+        messages.put(user)
+        val model = if (image != null) brain.ollamaVisionModel else brain.ollamaModel
+        fun call(noThinking: Boolean) = ollamaHttp.newCall(Request.Builder().url("${ollamaBase()}/api/chat")
+            .post(JSONObject().put("model", model).put("messages", messages).put("stream", true).put("keep_alive", "30m")
+                .put("options", JSONObject().put("temperature", 0.8))
+                .apply { if (noThinking) put("think", false) }
+                .toString().toRequestBody("application/json".toMediaType())).build()).execute()
+        var r = call(true)
+        if (r.code == 400) { r.close(); r = call(false) } // a model without a thinking switch
+        r.use { resp ->
+            if (!resp.isSuccessful) {
+                val body = resp.body?.string().orEmpty()
+                val why = runCatching { JSONObject(body).getString("error") }.getOrDefault(body).take(120)
+                error(if (resp.code == 404) "⚠ EVO-X2 nema model $model (Postavke → Mozak)." else "⚠ EVO-X2: ${resp.code} $why")
+            }
+            val src = resp.body!!.source()
+            while (true) {
+                val line = src.readUtf8Line() ?: break
+                if (line.isBlank()) continue
+                val o = runCatching { JSONObject(line) }.getOrNull() ?: continue
+                if (o.has("error")) error("⚠ EVO-X2: ${o.optString("error").take(120)}")
+                val piece = o.optJSONObject("message")?.optString("content").orEmpty()
+                if (piece.isNotEmpty()) emit(piece)
+                if (o.optBoolean("done")) break
+            }
+        }
+    }.flowOn(Dispatchers.IO)
+
     // ------------------------------------------------------------------ Gemini Nano (built into the phone)
 
     /** True: Gemini Nano through ML Kit; false: Gemma through LiteRT-LM. */
@@ -366,15 +450,17 @@ class LocalBrain(
         Tags are acted on and never spoken. Example: [happy][nod] Naravno, baš sam dobro!
     """.trimIndent() + "\n\n" + memory.promptSection(tools = false)
 
-    fun start(useGroq: Boolean = false) {
+    fun start(useGroq: Boolean = false, useOllama: Boolean = false) {
         if (running) return
-        groq = useGroq
+        groq = useGroq && !useOllama
+        ollama = useOllama
         if (groq && brain.groqKey.isBlank()) { brain.log("⚠ Upiši Groq ključ (Postavke → Mozak)."); face.say("Upiši Groq ključ u Postavkama"); return }
-        if (!groq && !ready) { brain.log("⚠ Model na mobitelu nije spreman (Postavke → Mozak)."); face.say("Model na mobitelu nije spreman"); return }
+        if (!groq && !ollama && !ready) { brain.log("⚠ Model na mobitelu nije spreman (Postavke → Mozak)."); face.say("Model na mobitelu nije spreman"); return }
         running = true; errorsInRow = 0; lastHeard = System.currentTimeMillis()
         history.clear()
         brain.beginExternal()
-        brain.log(if (groq) "· ${brain.name} razmišlja preko Groqa (${brain.groqModel})" else "· ${brain.name} razmišlja na mobitelu (${if (nanoMode) "Gemini Nano" else MODEL_NAME})")
+        brain.log(if (ollama) "· ${brain.name} razmišlja na EVO-X2 (${brain.ollamaModel}, za gledanje ${brain.ollamaVisionModel})"
+            else if (groq) "· ${brain.name} razmišlja preko Groqa (${brain.groqModel})" else "· ${brain.name} razmišlja na mobitelu (${if (nanoMode) "Gemini Nano" else MODEL_NAME})")
         if (tts == null) tts = TextToSpeech(context) { status ->
             ttsReady = status == TextToSpeech.SUCCESS
             tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
@@ -383,7 +469,7 @@ class LocalBrain(
                 @Deprecated("old API") override fun onError(id: String?) = spoken()
             })
         }
-        if (groq || nanoMode) { listen(); return }
+        if (groq || ollama || nanoMode) { listen(); return }
         scope.launch {
             if (engine == null) face.say("Učitavam model…")
             if (!ensureEngine()) { stop("⚠ Model se nije učitao. Probaj ga ponovno preuzeti."); return@launch }
@@ -429,7 +515,7 @@ class LocalBrain(
         runCatching { tts?.stop() }; speaking.set(0); generating = false
         main.postDelayed({ hush(false) }, 400) // after the recognizer's last chime
         val job = thinking
-        if (groq || nanoMode) job?.cancel()
+        if (groq || ollama || nanoMode) job?.cancel()
         scope.launch {
             // Stop a reply that is still being written, then drop the conversation; the engine stays loaded.
             var tries = 0
@@ -525,8 +611,15 @@ class LocalBrain(
                 if (speech.isNotEmpty()) { said.append(speech).append(' '); say(speech) }
             }
             runCatching {
+                var image: ByteArray? = null
+                if (ollama && wantsToSee(text)) {
+                    image = frameNow()
+                    if (image != null) { face.flash(Expr.CURIOUS); brain.log("👁 gleda (${brain.ollamaVisionModel})") }
+                    else brain.log("· kamera nije upaljena (Postavke → Kamera: \"Stevo vidi\" ili praćenje lica)")
+                }
                 val chunks: Flow<String> =
-                    if (groq) groqStream(text)
+                    if (ollama) ollamaStream(text, image)
+                    else if (groq) groqStream(text)
                     else if (nanoMode) nano.generateContentStream(nanoPrompt(text)).map { it.candidates.firstOrNull()?.text ?: "" }
                     else conversation!!.sendMessageAsync(text).map { it.toString() }
                 chunks.collect { chunk ->
@@ -538,6 +631,11 @@ class LocalBrain(
                 if (running) {
                     val why = it.message.orEmpty()
                     if (groq && why.startsWith("⚠")) { generating = false; main.post { stop(why) }; return@launch }
+                    if (ollama) {
+                        generating = false
+                        val msg = if (why.startsWith("⚠")) why else "⚠ EVO-X2 se ne javlja (${why.take(60)}). Je li upaljen i jesi li na kućnom Wi-Fi-ju?"
+                        main.post { stop(msg) }; return@launch
+                    }
                     brain.log("⚠ Model: ${why.take(100)}")
                 }
             }

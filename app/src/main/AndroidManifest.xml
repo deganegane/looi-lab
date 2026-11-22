@@ -33,6 +33,7 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:label="Stevo"
+        android:usesCleartextTraffic="true"
         android:theme="@style/Theme.LooiLab">
         <!-- GPU inference for the on-device model. -->
         <uses-native-library android:name="libvndksupport.so" android:required="false" />

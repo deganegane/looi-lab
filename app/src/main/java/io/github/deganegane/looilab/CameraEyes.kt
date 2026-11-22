@@ -40,6 +40,9 @@ class CameraEyes(private val context: Context) {
     /** Set while Stevo may see: receives a small JPEG about every [frameEveryMs]. */
     @Volatile var onFrame: ((ByteArray) -> Unit)? = null
     private val frameEveryMs = 1_500L
+    /** One fresh frame for whoever asked (the EVO-X2 brain looking at something). */
+    @Volatile private var wantFrame: ((ByteArray?) -> Unit)? = null
+    fun grabFrame(done: (ByteArray?) -> Unit) { if (!running) done(null) else wantFrame = done }
     private var lastFrame = 0L
 
     /** Average brightness of what the camera sees, 0 (dark) … 255; -1 until known. */
@@ -86,6 +89,7 @@ class CameraEyes(private val context: Context) {
 
     fun stop() {
         running = false
+        wantFrame?.invoke(null); wantFrame = null
         runCatching { provider?.unbindAll() }
         capture = null
         _face.value = null
@@ -103,6 +107,10 @@ class CameraEyes(private val context: Context) {
             var sum = 0L; var n = 0; var i = 0
             while (i < y.limit()) { sum += (y.get(i).toInt() and 0xFF); n++; i += 97 }
             if (n > 0) brightness = brightness.let { b -> val v = sum / n.toFloat(); if (b < 0) v else b * 0.8f + v * 0.2f }
+        }
+        wantFrame?.let { want ->
+            wantFrame = null
+            want(runCatching { jpeg(img.toBitmap(), rot, 896, 75) }.getOrNull())
         }
         val sink = onFrame
         if (sink != null && now - lastFrame >= frameEveryMs) {

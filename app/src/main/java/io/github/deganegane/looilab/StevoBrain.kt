@@ -255,7 +255,19 @@ class StevoBrain(
         get() = prefs.getString("groqModel", "openai/gpt-oss-120b")?.takeIf { it.isNotBlank() } ?: "openai/gpt-oss-120b"
         set(v) = prefs.edit().putString("groqModel", v.trim()).apply()
 
-    /** "gemini", "groq", "local" (a model on the phone) or "auto" (Gemini, then Groq, then the phone). */
+    /** Ollama on the EVO-X2 at home: big models, free, no quota, needs the home Wi-Fi. */
+    var ollamaUrl: String
+        get() = prefs.getString("ollamaUrl", "http://192.168.18.81:11434")?.takeIf { it.isNotBlank() } ?: "http://192.168.18.81:11434"
+        set(v) = prefs.edit().putString("ollamaUrl", v.trim()).apply()
+    var ollamaModel: String
+        get() = prefs.getString("ollamaModel", "gemma4:e4b")?.takeIf { it.isNotBlank() } ?: "gemma4:e4b"
+        set(v) = prefs.edit().putString("ollamaModel", v.trim()).apply()
+    /** Thinks instead of [ollamaModel] when Stevo is asked to look at something. */
+    var ollamaVisionModel: String
+        get() = prefs.getString("ollamaVision", "gemma4:26b")?.takeIf { it.isNotBlank() } ?: "gemma4:26b"
+        set(v) = prefs.edit().putString("ollamaVision", v.trim()).apply()
+
+    /** "gemini", "groq", "ollama" (the EVO-X2), "local" (a model on the phone) or "auto" (Gemini, then the EVO-X2, Groq, the phone). */
     var brainMode: String
         get() = prefs.getString("brain", "auto") ?: "auto"
         set(v) = prefs.edit().putString("brain", v).apply()
