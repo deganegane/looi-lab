@@ -33,7 +33,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.List
+import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.Build
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Face
@@ -42,6 +44,8 @@ import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -64,6 +68,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -82,6 +87,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -503,6 +509,41 @@ private fun CameraPage(brain: StevoBrain, a: SettingsActions) {
     }
 }
 
+/** A model chosen from the list on the EVO-X2; typed by hand while the list is not there. */
+@Composable
+private fun ModelPicker(label: String, value: String, options: List<String>?, onPick: (String) -> Unit) {
+    if (options.isNullOrEmpty()) {
+        OutlinedTextField(value, onPick, singleLine = true, label = { Text(label) }, modifier = Modifier.fillMaxWidth())
+        return
+    }
+    var open by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxWidth()) {
+        OutlinedTextField(
+            value, {}, readOnly = true, singleLine = true, label = { Text(label) },
+            trailingIcon = { Icon(Icons.Rounded.ArrowDropDown, contentDescription = null) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        // The text field swallows taps, so a see-through layer on top opens the list.
+        Box(Modifier.matchParentSize().clickable { open = true })
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            options.forEach { m ->
+                DropdownMenuItem(
+                    text = { Text(m + (MODEL_NOTES[m.substringBefore(':') + ":" + m.substringAfter(':', "latest")]?.let { "  ·  $it" } ?: "")) },
+                    onClick = { onPick(m); open = false },
+                    trailingIcon = if (m == value) ({ Icon(Icons.Rounded.Check, contentDescription = null) }) else null,
+                )
+            }
+        }
+    }
+}
+
+private val MODEL_NOTES = mapOf(
+    "gemma4:e4b" to "najbrži",
+    "gemma4:26b" to "brz, vidi slike",
+    "qwen3.5:122b" to "najpametniji, vidi slike",
+    "qwen3-coder-next:latest" to "za programiranje",
+)
+
 private val BRAIN_MODES = listOf("ollama" to "EVO-X2", "gemini" to "Gemini", "groq" to "Groq", "local" to "Mobitel", "auto" to "Auto")
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -534,12 +575,20 @@ private fun GeminiPage(brain: StevoBrain, local: LocalBrain, a: SettingsActions)
     var evoVision by remember { mutableStateOf(brain.ollamaVisionModel) }
     var evoState by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
+    // The models on the EVO-X2, for the pickers; null until they answer (then the fields stay typeable).
+    var evoModels by remember { mutableStateOf<List<String>?>(null) }
+    LaunchedEffect(evoUrl) {
+        delay(400) // let the address settle while it is being typed
+        evoModels = withContext(Dispatchers.IO) { local.ollamaModels() }
+            ?.filterNot { it.contains("embed", ignoreCase = true) }?.sorted()
+    }
     AppCard {
         CardTitle("EVO-X2 (Ollama)")
         OutlinedTextField(evoUrl, { evoUrl = it; brain.ollamaUrl = it; evoState = "" }, singleLine = true, label = { Text("Adresa") },
             placeholder = { Text("http://100.70.141.124:11434") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(evoModel, { evoModel = it; brain.ollamaModel = it }, singleLine = true, label = { Text("Model za razgovor") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(evoVision, { evoVision = it; brain.ollamaVisionModel = it }, singleLine = true, label = { Text("Model za gledanje") }, modifier = Modifier.fillMaxWidth())
+        ModelPicker("Model za razgovor", evoModel, evoModels) { evoModel = it; brain.ollamaModel = it }
+        ModelPicker("Model za gledanje", evoVision, evoModels) { evoVision = it; brain.ollamaVisionModel = it }
+        if (evoModels == null) Hint("EVO-X2 se još ne javlja, pa ime modela možeš upisati ručno.")
         Row(verticalAlignment = Alignment.CenterVertically) {
             FilledTonalButton(onClick = {
                 evoState = "Provjeravam…"
