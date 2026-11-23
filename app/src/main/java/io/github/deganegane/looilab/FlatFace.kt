@@ -49,7 +49,7 @@ enum class FaceTheme(val label: String, val about: String) {
     PRSTEN("Prsten", "Oči kao objektivi, s podjelom i narančastom zjenicom."),
     VIZIR("Vizir", "Vizir sa zakovicama i antenom koja zasvijetli."),
     KVADRAT("Kvadrat", "Kvadratne oči sa zjenicama i trakom energije."),
-    ATOM("Atom", "Jezgra s orbitama i elektronom koji kruži."),
+    TRAKA("Traka", "Dvije role magnetofona koje se vrte dok je budan."),
 }
 
 /** Any face, by the theme chosen in [FaceState.theme]. */
@@ -65,7 +65,7 @@ private fun pal(t: FaceTheme) = when (t) {
     FaceTheme.PRSTEN -> Pal(Color(0xFF0C3B3A), Color(0xFFF4EBD6), Color(0xFFFF8A3D))
     FaceTheme.VIZIR -> Pal(Color(0xFFE4572E), Color(0xFFFFF3DC), Color(0xFFFFF3DC), band = Color(0xFF1D1A17))
     FaceTheme.KVADRAT -> Pal(Color(0xFF1B1F22), Color(0xFF9FE3C6), Color(0xFF9FE3C6))
-    FaceTheme.ATOM -> Pal(Color(0xFFE8B93C), Color(0xFF16233B), Color(0xFFD9482B))
+    FaceTheme.TRAKA -> Pal(Color(0xFF2A1E17), Color(0xFFF1E3C8), Color(0xFFF08A24))
     else -> Pal(Color(0xFF171512), Color(0xFFEFE6D2), Color(0xFFE4572E)) // Disk
 }
 
@@ -183,8 +183,8 @@ private fun round(w: Float) = Stroke(w, cap = StrokeCap.Round, join = StrokeJoin
 private fun DrawScope.drawEye(t: FaceTheme, p: Pal, e: Eye, cx0: Float, left: Boolean, look: Offset, phase: Float) {
     val cx = cx0 + e.dx; val cy = EY + e.dy
     val sgn = if (left) 1f else -1f
-    val outline = t == FaceTheme.PRSTEN || t == FaceTheme.KVADRAT
-    val sw = when (t) { FaceTheme.DISK -> 15f; FaceTheme.CRTICA, FaceTheme.VIZIR -> 14f; FaceTheme.ATOM -> 9f; else -> 7f }
+    val outline = t == FaceTheme.PRSTEN || t == FaceTheme.KVADRAT || t == FaceTheme.TRAKA
+    val sw = when (t) { FaceTheme.DISK -> 15f; FaceTheme.CRTICA, FaceTheme.VIZIR -> 14f; else -> 7f }
     val heartColor = if (t == FaceTheme.KVADRAT || t == FaceTheme.VIZIR) p.ink else p.accent
     when (e.kind) {
         Kind.ARC -> drawPath(arcPath(cx, cy, 72f, 34f, true), p.ink, style = round(sw))
@@ -217,22 +217,20 @@ private fun DrawScope.drawEye(t: FaceTheme, p: Pal, e: Eye, cx0: Float, left: Bo
                     }
                 }
             }
-            FaceTheme.ATOM -> {
-                val flat = e.h < 0.3f
-                val rx = 44f * e.s; val ry = 15f * e.s * (if (flat) 0.25f else 1f)
-                // a second, fainter orbit
-                withTransform({ rotate(sgn * (40f - e.tilt * 30f), Offset(cx, cy)) }) {
-                    drawOval(p.ink, Offset(cx - rx, cy - ry * 0.85f), Size(rx * 2, ry * 1.7f), alpha = 0.45f, style = Stroke(1.5f))
+            FaceTheme.TRAKA -> {
+                // a tape reel: rim, three spokes that turn, an orange hub
+                val r = 36f * e.s
+                clipPath(lidPath(cx, cy, r, e, left)) {
+                    drawCircle(p.ink, r - 3f, Offset(cx, cy), style = Stroke(6f))
+                    if (e.h >= 0.3f) {
+                        for (i in 0..2) {
+                            val a = (phase * 2 * PI.toFloat()) + i * 2 * PI.toFloat() / 3
+                            drawLine(p.ink, Offset(cx + 13f * cos(a), cy + 13f * sin(a)), Offset(cx + (r - 9f) * cos(a), cy + (r - 9f) * sin(a)), 5f, StrokeCap.Round)
+                        }
+                        drawCircle(p.accent, 9f * e.s, Offset(cx, cy))
+                    }
                 }
-                // the main orbit, with an electron going round
-                withTransform({ rotate(sgn * (-24f + e.tilt * 46f), Offset(cx, cy)) }) {
-                    drawOval(p.ink, Offset(cx - rx, cy - ry), Size(rx * 2, ry * 2), style = Stroke(3.5f))
-                    val a = phase * 2 * PI.toFloat() * sgn
-                    drawCircle(p.accent, 4.5f, Offset(cx + rx * cos(a), cy + ry * sin(a)))
-                }
-                val dot = 13f * e.s * (if (flat) 0.45f else if (e.h < 1f) 0.8f else 1f)
-                drawCircle(p.ink, dot, Offset(cx, cy))
-                if (e.h >= 0.5f) drawCircle(Color(0xFFFFF6DD), 3.2f * e.s, Offset(cx - 4f * e.s, cy - 4f * e.s))
+                if (e.h < 0.3f) drawLine(p.ink, Offset(cx - r, cy), Offset(cx + r, cy), 6f, StrokeCap.Round)
             }
             else -> { // Disk
                 val r = 38f * e.s
@@ -312,10 +310,17 @@ private fun DrawScope.deco(t: FaceTheme, p: Pal, x: Expr, name: String, needle: 
             val lit = (needle * 9f + 0.5f).toInt()
             for (i in 0 until 9) drawRect(p.ink, Offset(164f + i * 8f, 186f), Size(4f, 4f), alpha = if (i < lit) 0.9f else 0.25f)
         }
-        FaceTheme.ATOM -> {
-            val stars = when (x) { Expr.HAPPY, Expr.LOVE, Expr.EXCITED, Expr.LAUGH -> 3; Expr.SURPRISED -> 2; Expr.CURIOUS, Expr.WINK -> 1; else -> 0 }
-            listOf(Triple(44f, 40f, 9f), Triple(356f, 52f, 7f), Triple(330f, 158f, 6f)).take(stars).forEach { (sx, sy, r) -> drawPath(starPath(sx, sy, r), p.ink) }
-            text("ATOM", 22f, 186f, p.ink); text("No. 7", 378f, 186f, p.ink, alignRight = true)
+        FaceTheme.TRAKA -> {
+            // the tape runs from reel to reel past the head; the counter shows his mood
+            val tape = Path().apply {
+                moveTo(EL - 30f, EY + 24f); quadraticTo(EL - 20f, 176f, 176f, 176f)
+                lineTo(224f, 176f); quadraticTo(ER + 20f, 176f, ER + 30f, EY + 24f)
+            }
+            drawPath(tape, p.ink, alpha = 0.55f, style = round(2f))
+            drawRoundRect(p.accent, Offset(188f, 170f), Size(24f, 12f), CornerRadius(3f, 3f))
+            brows(x, p.ink, 54f, 34f, 5f)
+            text("TRAKA A", 22f, 24f, p.ink)
+            text("%03d".format((needle * 999f).toInt()), 378f, 24f, p.accent, alignRight = true)
         }
         else -> { // Disk
             drawRoundRect(p.ink, Offset(10f, 10f), Size(380f, 180f), CornerRadius(22f, 22f), alpha = 0.3f, style = Stroke(1.5f))
@@ -397,7 +402,7 @@ fun FlatFace(state: FaceState, theme: FaceTheme, modifier: Modifier = Modifier) 
                 withTransform({
                     translate(gx, gy + sink)
                     scale((1f + t * 0.06f) * pop.value, blink.value * (1f + t * 0.16f) * pop.value * breathe, pivot = Offset(cx + eye.dx, EY + eye.dy))
-                }) { drawEye(theme, p, eye, cx, left, look, drift) }
+                }) { drawEye(theme, p, eye, cx, left, look, if (state.asleep) 0f else drift) }
             }
             // Asleep: three little z's drift up.
             val mark = if (theme == FaceTheme.VIZIR) p.band else p.ink
