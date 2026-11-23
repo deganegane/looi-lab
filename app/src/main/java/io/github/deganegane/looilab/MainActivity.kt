@@ -247,6 +247,8 @@ class MainActivity : ComponentActivity() {
         body = BodyLanguage(ble, level = { brain.liveliness }, speaking = { brain.state.value == TalkState.SPEAKING }, asleep = { life.sleeping })
         body.start(lifecycleScope)
         eyes.rotation = displayRotation()
+        face.theme = FaceTheme.entries.firstOrNull { it.name == brain.faceTheme } ?: FaceTheme.NIXIE
+        face.name = brain.name
         tracking = Tracking(eyes, face, ble, mirror = { brain.mirror },
             bodyAllowed = { screen == Screen.FACE && !life.sleeping })
         ble.onReady = { if (brain.lightMode == "on") setLight(true) }
@@ -323,7 +325,7 @@ class MainActivity : ComponentActivity() {
                             onConnect = { connect() },
                             onTrick = { life.wake(); lifecycleScope.launch { autonomy.trick() } },
                         )
-                        Screen.SETTINGS -> SettingsScreen(ble, brain, memory, local, SettingsActions(
+                        Screen.SETTINGS -> SettingsScreen(ble, brain, memory, local, face, SettingsActions(
                             onImportModel = { importModel.launch(arrayOf("*/*")) },
                             onBack = { showScreen(Screen.FACE) },
                             onConnect = { connect() },

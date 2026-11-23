@@ -112,7 +112,7 @@ fun HomeFace(
     LaunchedEffect(face.messageId) { val id = face.messageId; if (face.message != null) { delay(3_200); face.clearMessage(id) } }
     LaunchedEffect(Unit) { delay(1_200); if (face.message == null) face.say("Dodirni za razgovor · povuci gore za izbornik") }
     Box(Modifier.fillMaxSize()) {
-        NixieFace(
+        StevoFace(
             face,
             Modifier.fillMaxSize()
                 .pointerInput(Unit) {

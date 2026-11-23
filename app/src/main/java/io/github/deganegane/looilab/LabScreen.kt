@@ -262,7 +262,7 @@ private fun FaceTab(face: FaceState, onFullscreen: () -> Unit) {
         Box(
             Modifier.fillMaxWidth().aspectRatio(2f).clip(RoundedCornerShape(16.dp))
                 .border(6.dp, Color(0xFF2B1D14), RoundedCornerShape(16.dp))
-        ) { NixieFace(face, Modifier.fillMaxSize()) }
+        ) { StevoFace(face, Modifier.fillMaxSize()) }
         Spacer(Modifier.height(8.dp))
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Expr.entries.forEach { e ->

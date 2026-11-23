@@ -8,7 +8,11 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Star
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -99,7 +103,7 @@ import java.util.Locale
  * page per group behind each row. Back on a page returns to the overview.
  */
 private enum class Page(val title: String) {
-    CHARACTER("Osobnost"), VOICE("Glas i jezik"), MEMORY("Pamćenje"),
+    CHARACTER("Osobnost"), LOOK("Izgled lica"), VOICE("Glas i jezik"), MEMORY("Pamćenje"),
     ROBOT("Robot"), CAMERA("Kamera i zaslon"), GEMINI("Mozak"),
 }
 
@@ -116,7 +120,7 @@ class SettingsActions(
 )
 
 @Composable
-fun SettingsScreen(ble: LooiBle, brain: StevoBrain, memory: Memory, local: LocalBrain, a: SettingsActions) {
+fun SettingsScreen(ble: LooiBle, brain: StevoBrain, memory: Memory, local: LocalBrain, face: FaceState, a: SettingsActions) {
     var page by rememberSaveable { mutableStateOf<Page?>(null) }
     BackHandler { if (page != null) page = null else a.onBack() }
     val hubScroll = rememberScrollState()
@@ -129,10 +133,11 @@ fun SettingsScreen(ble: LooiBle, brain: StevoBrain, memory: Memory, local: Local
         },
         label = "settingsPage",
     ) { p ->
-        if (p == null) Hub(ble, brain, memory, local, hubScroll, a, onOpen = { page = it })
+        if (p == null) Hub(ble, brain, memory, local, face, hubScroll, a, onOpen = { page = it })
         else SettingsPage(p.title, onBack = { page = null }) {
             when (p) {
-                Page.CHARACTER -> CharacterPage(brain)
+                Page.CHARACTER -> CharacterPage(brain, face)
+                Page.LOOK -> LookPage(brain, face)
                 Page.VOICE -> VoicePage(brain)
                 Page.MEMORY -> MemoryPage(memory, a)
                 Page.ROBOT -> RobotPage(ble, brain, a)
@@ -156,7 +161,7 @@ private fun TopBar(title: String, onBack: () -> Unit) {
 }
 
 @Composable
-private fun Hub(ble: LooiBle, brain: StevoBrain, memory: Memory, local: LocalBrain, scroll: ScrollState, a: SettingsActions, onOpen: (Page) -> Unit) {
+private fun Hub(ble: LooiBle, brain: StevoBrain, memory: Memory, local: LocalBrain, face: FaceState, scroll: ScrollState, a: SettingsActions, onOpen: (Page) -> Unit) {
     val robot by ble.state.collectAsState()
     val notes by memory.notes.collectAsState()
     Scaffold(topBar = { TopBar("Postavke", a.onBack) }) { padding ->
@@ -167,6 +172,7 @@ private fun Hub(ble: LooiBle, brain: StevoBrain, memory: Memory, local: LocalBra
         ) {
             HubGroup(brain.name) {
                 HubRow(Icons.Rounded.Person, "Osobnost", brain.name + " · " + listOf("miran", "normalan", "živahan")[brain.liveliness.coerceIn(0, 2)] + " · " + brain.personality.take(50)) { onOpen(Page.CHARACTER) }
+                HubRow(Icons.Rounded.Star, "Izgled lica", face.theme.label + " · " + face.theme.about) { onOpen(Page.LOOK) }
                 HubRow(Icons.Rounded.Call, "Glas i jezik",
                     listOf(StevoBrain.LANGUAGES[brain.language] ?: "", brain.voice,
                         "%.2f×".format(brain.speed), "visina %.2f×".format(brain.pitch)).joinToString(" · ")) { onOpen(Page.VOICE) }
@@ -296,13 +302,38 @@ private fun SliderRow(label: String, value: Float, range: ClosedFloatingPointRan
 
 // ---- pages ----------------------------------------------------------------------------------------
 
+/** Every face as a live preview; a tap picks it. */
 @Composable
-private fun CharacterPage(brain: StevoBrain) {
+private fun LookPage(brain: StevoBrain, face: FaceState) {
+    FaceTheme.entries.forEach { t ->
+        val preview = remember(t) { FaceState().apply { theme = t } }
+        preview.name = face.name
+        val chosen = face.theme == t
+        Card(
+            onClick = { face.theme = t; brain.faceTheme = t.name; preview.flash(Expr.HAPPY) },
+            modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth(), shape = MaterialTheme.shapes.medium,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+            border = if (chosen) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
+        ) {
+            Box(Modifier.fillMaxWidth().aspectRatio(2.4f)) { StevoFace(preview, Modifier.fillMaxSize()) }
+            Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(t.label, style = MaterialTheme.typography.titleMedium)
+                    Text(t.about, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (chosen) Icon(Icons.Rounded.Check, contentDescription = "Odabrano", tint = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CharacterPage(brain: StevoBrain, face: FaceState) {
     var name by remember { mutableStateOf(brain.name) }
     var personality by remember { mutableStateOf(brain.personality) }
     AppCard {
         CardTitle("Ime")
-        OutlinedTextField(name, { name = it; brain.name = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(name, { name = it; brain.name = it; face.name = brain.name }, singleLine = true, modifier = Modifier.fillMaxWidth())
         Hint("Ovako se predstavlja i na ovo ime se javlja.")
     }
     AppCard {

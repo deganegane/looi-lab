@@ -67,6 +67,9 @@ class FaceState {
     /** 0..1 loudness of the microphone while he listens: the line under his eyes. */
     var mic by mutableStateOf(0f)
     var hud by mutableStateOf(Hud.NONE)
+    /** Which face is drawn, and the name some themes print on it. */
+    var theme by mutableStateOf(FaceTheme.NIXIE)
+    var name by mutableStateOf("Stevo")
     /** Asleep: slow breathing and little z's. */
     var asleep by mutableStateOf(false)
     /** A short line of text shown under the face for a moment. */

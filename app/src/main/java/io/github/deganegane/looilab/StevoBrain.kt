@@ -146,6 +146,10 @@ class StevoBrain(
     var name: String
         get() = prefs.getString("name", "Stevo")?.takeIf { it.isNotBlank() } ?: "Stevo"
         set(v) = prefs.edit().putString("name", v.trim()).apply()
+    /** The look of the face (a FaceTheme name). */
+    var faceTheme: String
+        get() = prefs.getString("faceTheme", "NIXIE") ?: "NIXIE"
+        set(v) = prefs.edit().putString("faceTheme", v).apply()
     /** Free text: how Stevo behaves and talks (style, tone, quirks). */
     var personality: String
         get() = prefs.getString("personality", DEFAULT_PERSONALITY) ?: DEFAULT_PERSONALITY
