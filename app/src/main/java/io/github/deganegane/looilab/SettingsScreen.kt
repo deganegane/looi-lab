@@ -576,11 +576,19 @@ private fun GeminiPage(brain: StevoBrain, local: LocalBrain, a: SettingsActions)
     var evoState by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     // The models on the EVO-X2, for the pickers; null until they answer (then the fields stay typeable).
-    var evoModels by remember { mutableStateOf<List<String>?>(null) }
+    // The last list seen is kept, so the pickers work even while the EVO-X2 is out of reach.
+    var evoModels by remember { mutableStateOf(brain.ollamaModelsCache.takeIf { it.isNotEmpty() }) }
+    var evoLive by remember { mutableStateOf(false) }
     LaunchedEffect(evoUrl) {
         delay(400) // let the address settle while it is being typed
-        evoModels = withContext(Dispatchers.IO) { local.ollamaModels() }
-            ?.filterNot { it.contains("embed", ignoreCase = true) }?.sorted()
+        evoLive = false
+        // Ask again every few seconds until it answers (Tailscale or Wi-Fi may come up after the page opens).
+        while (true) {
+            val fresh = withContext(Dispatchers.IO) { local.ollamaModels() }
+                ?.filterNot { it.contains("embed", ignoreCase = true) }?.sorted()
+            if (fresh != null) { evoModels = fresh; evoLive = true; brain.ollamaModelsCache = fresh; break }
+            delay(5_000)
+        }
     }
     AppCard {
         CardTitle("EVO-X2 (Ollama)")
@@ -588,7 +596,10 @@ private fun GeminiPage(brain: StevoBrain, local: LocalBrain, a: SettingsActions)
             placeholder = { Text("http://100.70.141.124:11434") }, modifier = Modifier.fillMaxWidth())
         ModelPicker("Model za razgovor", evoModel, evoModels) { evoModel = it; brain.ollamaModel = it }
         ModelPicker("Model za gledanje", evoVision, evoModels) { evoVision = it; brain.ollamaVisionModel = it }
-        if (evoModels == null) Hint("EVO-X2 se još ne javlja, pa ime modela možeš upisati ručno.")
+        if (!evoLive) Hint(
+            if (evoModels == null) "EVO-X2 se još ne javlja (${brain.ollamaUrl}). Je li Tailscale uključen? Dok se ne javi, ime modela možeš upisati ručno."
+            else "EVO-X2 se trenutno ne javlja (${brain.ollamaUrl}); popis je od zadnjeg puta. Je li Tailscale uključen?"
+        )
         Row(verticalAlignment = Alignment.CenterVertically) {
             FilledTonalButton(onClick = {
                 evoState = "Provjeravam…"

@@ -282,6 +282,10 @@ class StevoBrain(
     var tavilyKey: String
         get() = prefs.getString("tavilyKey", "") ?: ""
         set(v) = prefs.edit().putString("tavilyKey", v.trim()).apply()
+    /** The models the EVO-X2 had the last time it answered, for the settings pickers. */
+    var ollamaModelsCache: List<String>
+        get() = (prefs.getString("ollamaModelsCache", "") ?: "").split('\n').filter { it.isNotBlank() }
+        set(v) = prefs.edit().putString("ollamaModelsCache", v.joinToString("\n")).apply()
     val canSearch: Boolean get() = searxUrl.isNotBlank() || tavilyKey.isNotBlank()
 
     /** "gemini", "groq", "ollama" (the EVO-X2), "local" (a model on the phone) or "auto" (Gemini, then the EVO-X2, Groq, the phone). */
