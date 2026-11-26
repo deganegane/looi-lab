@@ -326,7 +326,7 @@ class LocalBrain(
         messages.put(user)
         val model = if (image != null) brain.ollamaVisionModel else brain.ollamaModel
         fun call(noThinking: Boolean) = ollamaHttp.newCall(Request.Builder().url("${ollamaBase()}/api/chat")
-            .post(JSONObject().put("model", model).put("messages", messages).put("stream", true).put("keep_alive", if (image != null) "10m" else "-1")
+            .post(JSONObject().put("model", model).put("messages", messages).put("stream", true).put("keep_alive", if (image != null) "10m" as Any else -1) // -1 must be a number: "-1" is refused
                 .put("options", JSONObject().put("temperature", 0.8))
                 .apply { if (noThinking) put("think", false) }
                 .toString().toRequestBody("application/json".toMediaType())).build()).execute()
