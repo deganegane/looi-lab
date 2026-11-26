@@ -281,6 +281,29 @@ class LocalBrain(
         }
     }.getOrNull()
 
+    /**
+     * Is the chat model already in the EVO-X2's memory? A big one (qwen3.5:122b, 81 GB) takes about
+     * two minutes to load from disk, so Stevo says so instead of standing there silent. Null: no answer.
+     */
+    fun ollamaLoaded(): Boolean? = runCatching {
+        quickHttp.newCall(Request.Builder().url("${ollamaBase()}/api/ps").build()).execute().use { r ->
+            if (!r.isSuccessful) return null
+            val arr = JSONObject(r.body?.string().orEmpty()).optJSONArray("models") ?: JSONArray()
+            val want = brain.ollamaModel
+            (0 until arr.length()).any { arr.getJSONObject(it).optString("name").let { n -> n == want || n == "$want:latest" } }
+        }
+    }.getOrNull()
+
+    /** Starts loading the chat model on the EVO-X2 and keeps it there, so the first answer is quick. Fire and forget. */
+    fun ollamaWarm() {
+        io.launch {
+            runCatching {
+                val body = JSONObject().put("model", brain.ollamaModel).put("keep_alive", -1).toString().toRequestBody("application/json".toMediaType())
+                ollamaHttp.newCall(Request.Builder().url("${ollamaBase()}/api/generate").post(body).build()).execute().close()
+            }
+        }
+    }
+
     private val lookWords = listOf(
         "vidiš", "vidis", "vidi li", "vidi ovo", "pogledaj", "pogledati", "pogle", "što je ovo", "sto je ovo",
         "što držim", "sto drzim", "u ruci", "kako izgledam", "što nosim", "sto nosim", "koja je ovo", "koji je ovo",
@@ -303,7 +326,7 @@ class LocalBrain(
         messages.put(user)
         val model = if (image != null) brain.ollamaVisionModel else brain.ollamaModel
         fun call(noThinking: Boolean) = ollamaHttp.newCall(Request.Builder().url("${ollamaBase()}/api/chat")
-            .post(JSONObject().put("model", model).put("messages", messages).put("stream", true).put("keep_alive", "30m")
+            .post(JSONObject().put("model", model).put("messages", messages).put("stream", true).put("keep_alive", if (image != null) "10m" else "-1")
                 .put("options", JSONObject().put("temperature", 0.8))
                 .apply { if (noThinking) put("think", false) }
                 .toString().toRequestBody("application/json".toMediaType())).build()).execute()

@@ -136,7 +136,14 @@ class MainActivity : ComponentActivity() {
         face.flash(Expr.THINKING)
         lifecycleScope.launch {
             val models = withContext(Dispatchers.IO) { local.ollamaModels() }
+            val loaded = if (models != null) withContext(Dispatchers.IO) { local.ollamaLoaded() } else null
             checkingEvo = false
+            if (models != null && loaded == false) {
+                // A cold model takes a while to come off the disk; say so, and start loading it now.
+                local.ollamaWarm()
+                face.say("Budim mozak na EVO-X2, prvi odgovor može potrajati do dvije minute")
+                ble.note("··", "EVO-X2 učitava ${brain.ollamaModel}")
+            }
             val why = if (viaGemini) "Gemini nije dostupan" else "EVO-X2 se ne javlja"
             when {
                 models != null -> { if (viaGemini) face.say("Gemini nije dostupan, razmišljam na EVO-X2"); local.start(useOllama = true) }
@@ -252,6 +259,8 @@ class MainActivity : ComponentActivity() {
         tracking = Tracking(eyes, face, ble, mirror = { brain.mirror },
             bodyAllowed = { screen == Screen.FACE && !life.sleeping })
         ble.onReady = { if (brain.lightMode == "on") setLight(true) }
+        // Wake the big model on the EVO-X2 now, so it is ready by the time you talk to Stevo.
+        if (brain.brainMode == "ollama" || brain.brainMode == "auto") local.ollamaWarm()
 
         lifecycleScope.launch {
             ble.events.collect { e ->
